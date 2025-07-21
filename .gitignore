@@ -1,0 +1,146 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# venv
+/venv
+venv/
+.venv/
+
+*.md
+
+config.py
+*storybook.log
+storybook-static
+
+stories/
+@/stories
+
+@/.storybook
+
+@/temp
+
+# Vitest 测试配置
+vitest.config.ts
+vitest.shims.d.ts
+
+# Storybook 相关
+.storybook/
+stories/
+
+# 日志文件
+@/logs
+
+# 临时文件
+@/temp
+
+# 文档和配置文件
+OPENMANUS_INTEGRATION.md
+
+test-openmanus-integration.js
+
+openmanus-venv/
+
+# OpenManus/config/config.toml配置文件的忽略规则
+/logs/
+OpenManus/config/config.toml
+
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+.DS_Store
+node_modules
+/dist
+
+
+# local env files
+.env.local
+.env.*.local
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+@/dis
+@/doubaovoice_demo
+@/OpenManus
