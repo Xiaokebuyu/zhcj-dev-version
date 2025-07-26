@@ -76,7 +76,7 @@ export function VoiceCallMode({
   const getConnectionStatusText = (): string => {
     switch (voiceCallState.connectionStatus) {
       case 'connecting':
-        return '正在连接豆包语音服务...';
+        return '正在连接AI语音服务...';
       case 'connected':
         return '通话中';
       case 'disconnected':
@@ -111,9 +111,9 @@ export function VoiceCallMode({
         <Phone size={32} className="text-orange-500" strokeWidth={2} />
       </div>
       
-      <h3 className="text-lg font-semibold text-gray-800 mb-2">豆包语音通话</h3>
+      <h3 className="text-lg font-semibold text-gray-800 mb-2">AI语音通话</h3>
       <p className="text-gray-600 text-sm text-center mb-6 leading-relaxed">
-        与豆包AI进行实时语音对话<br />
+        与AI进行实时语音对话<br />
         支持实时转录和智能回复
       </p>
       
@@ -248,7 +248,7 @@ export function VoiceCallMode({
       
       <h3 className="text-lg font-semibold text-gray-800 mb-2">连接失败</h3>
       <p className="text-gray-600 text-sm text-center mb-6">
-        无法连接到豆包语音服务<br />
+        无法连接到AI语音服务<br />
         请检查网络连接后重试
       </p>
       

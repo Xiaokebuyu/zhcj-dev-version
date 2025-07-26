@@ -859,13 +859,13 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
         isOpen,
         isMinimized: false, // 项目中没有最小化，只有展开/收起
         position: config.position || 'bottom-right',
-        buttonSize: {
-          width: 56,
-          height: 56
-        },
+              buttonSize: {
+        width: 180,  // 修改为实测成功的尺寸
+        height: 70   // 修改为实测成功的尺寸
+      },
         expandedSize: {
-          width: isOpen ? 384 : 56,
-          height: isOpen ? 500 : 56
+          width: isOpen ? 384 : 180,  // 收起时使用新的按钮宽度
+          height: isOpen ? 500 : 70   // 收起时使用新的按钮高度
         },
         offset: {
           bottom: 16,
@@ -1200,6 +1200,21 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
 
     let hasAddedMessage = false;
     let buffer = '';
+    let currentFinalContent = '';
+    let currentFinalMessageId = '';
+
+    const triggerTTSForSegment = (content: string, messageId: string) => {
+      if (voiceSettings.autoPlay && content.trim()) {
+        generateSpeech(content).then(audioUrl => {
+          if (audioUrl) {
+            playAudio(audioUrl);
+            setMessages(prev => prev.map(msg =>
+              msg.id === messageId ? { ...msg, audioUrl } : msg
+            ));
+          }
+        });
+      }
+    };
 
     try {
       while (true) {
@@ -1241,9 +1256,12 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                   break;
 
                 case 'content': {
-                  // 使用当前阶段的 messageId 来生成唯一的最终回复 ID，避免与工具调用前的回复冲突
-                  // 不能直接使用服务器返回的 messageId（整次对话固定），否则在工具调用后续阶段会与之前的 "最终回复" 冲突
+                  if (parsed.content) {
+                    currentFinalContent += parsed.content;
+                  }
                   const finalId = currentMessage.id + '_final';
+                  currentFinalMessageId = finalId;
+                  
                   setMessages(prev => {
                     const idx = prev.findIndex(m => m.id === finalId);
                     if (idx === -1) {
@@ -1270,6 +1288,11 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                 }
 
                 case 'tool_execution':
+                  // 工具调用意味着一个内容段落的结束
+                  triggerTTSForSegment(currentFinalContent, currentFinalMessageId);
+                  currentFinalContent = '';
+                  currentFinalMessageId = '';
+
                   console.log('🛠️ 工具执行开始:', parsed.tool_calls);
                   
                   // 完成推理阶段
@@ -1412,6 +1435,11 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                   break;
 
                 case 'done':
+                  // 'done'事件意味着最后一个内容段落的结束
+                  triggerTTSForSegment(currentFinalContent, currentFinalMessageId);
+                  currentFinalContent = '';
+                  currentFinalMessageId = '';
+
                   console.log('✅ 响应完成');
                   
                   // 完成思维链
@@ -1476,7 +1504,7 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     } finally {
       reader.releaseLock();
     }
-  }, [setMessages, setToolProgress]);
+  }, [setMessages, setToolProgress, voiceSettings.autoPlay, generateSpeech, playAudio]);
 
   // 🆕 启动OpenManus任务监控
   const startTaskMonitoring = useCallback((taskIds: string[], messageId: string) => {
@@ -1993,9 +2021,9 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
 
   // 示例问题
   const exampleQuestions = [
-    "最新的助残政策是什么？",
-    "帮我发布一个手语学习的讨论帖子",
-    "我需要帮助，帮我发布一个帮助请求？"
+    "我想了解一下最新的时事新闻",
+    "请帮我发布一个关于天气的讨论帖",
+    "我想了解当前的助残政策，并且在论坛进行讨论"
   ];
 
   // 初始界面组件
@@ -2014,7 +2042,7 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
             我是专注于帮助残障人士的助残AI。
           </p>
           <p className="text-gray-700 mt-2">
-            有什么关于 <span className="bg-black text-white px-2 py-0.5 rounded">残建</span> <span className="bg-black text-white px-2 py-0.5 rounded">助残政策</span> 的问题都可以问我
+            有什么关于 <span className="bg-black text-white px-2 py-0.5 rounded">残健</span>以及 <span className="bg-black text-white px-2 py-0.5 rounded">助残政策</span> 的问题都可以问我
           </p>
         </div>
       </div>
@@ -2235,7 +2263,15 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
               animation: 'pulse 2s infinite',
             }}
           />
-          <span className="ask-ai-text">
+          <span 
+            className="ask-ai-text"
+            style={{
+              display: 'inline',
+              visibility: 'visible',
+              opacity: 1,
+              whiteSpace: 'nowrap'
+            }}
+          >
             询问 AI
           </span>
         </button>
@@ -2274,7 +2310,7 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                     className={`absolute h-10 bg-white rounded-full shadow-md transition-all duration-300 ease-in-out ${
                       assistantMode === 'text' 
                         ? 'w-[140px] translate-x-0' 
-                        : 'w-[135px] translate-x-[140px]'
+                        : 'w-[135px] translate-x-[150px]'
                     }`}
                   />
                   
@@ -2302,9 +2338,9 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                     <span className={`w-5 h-5 rounded-full flex items-center justify-center transition-colors duration-300 ${
                       assistantMode === 'voice-call' ? 'bg-gray-900' : 'bg-gray-400'
                     }`}>
-                      <span className="text-[10px] font-bold text-white">豆</span>
+                      <span className="text-[10px] font-bold text-white">聊</span>
                     </span>
-                    <span className="text-sm">与豆包聊天</span>
+                    <span className="text-sm">与AI聊天</span>
                   </button>
                 </div>
                 

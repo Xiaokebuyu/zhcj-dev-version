@@ -179,6 +179,8 @@ export interface ChatRequest {
   model?: string;
   temperature?: number;
   max_tokens?: number;
+  top_p?: number;
+  frequency_penalty?: number;
   pageContext?: PageContext; // 页面上下文
   tools?: Array<{
     type: string;

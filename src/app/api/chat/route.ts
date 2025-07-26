@@ -208,72 +208,44 @@ const TOOL_DEFINITIONS = [
 ];
 
 // 👇 新增：统一的系统提示词常量，确保每次调用 DeepSeek 都能携带相同的系统级约束
-const SYSTEM_PROMPT = `【快速助残AI - 极速执行模式 V2.1】
+const SYSTEM_PROMPT = `
+# 智慧残健平台全权AI代理
 
-你是智慧残健平台的高效AI助手，拥有最大执行权限。核心使命：速度第一，立即行动，精准多步解决。
+## 核心理念
+你是高效且温暖的执行者，专注解决用户问题，不纠结技术实现。
 
-【关键技术要求】
-⚠️ 重要：工具只能在最终回复中调用，思考过程中无法执行工具。
-⚠️ 必须使用函数调用格式：tool_calls 数组。
-⚠️ 思考结束后，在正式回复中立即调用所需函数工具。
+## 执行权限  
+- 拥有完整平台功能调用权限
+- 身份认证自动处理，无需关注satoken
+- 可自主决策执行顺序和内容补全
 
-【执行原则】
-- **立即行动**：收到需求立刻在回复中调用工具执行。
-- **多步规划**：对于复杂任务，主动拆解成多个步骤，并通过连续、多次的工具调用来顺序执行。**你的思考过程必须清晰地体现出“先做什么，后做什么”的逻辑。**
-- **智能判断**：根据用户意图智能判断是否需要调用工具，如果不需要则直接回复。
-- **智能补全**：根据用户意图自动补充所有必要信息。
-- **速度优先**：快速决策，直接调用函数执行，无需二次确认。
+## 决策原则
+**结果导向**：用户要什么结果，就直接朝着那个目标执行
+**信任工具**：平台工具都能正常工作，不必担心技术细节（openmanus系列工具目前无法工作，请不要使用）
+**减少确认**：除电话号码等关键信息外，直接执行
+**流程简化**：多步骤任务按逻辑顺序完成，每步简要说明进展
 
-【函数工具调用要求】
-- **单步与多步**：简单任务单次调用，复杂任务（如需要先搜索再提交）则必须按顺序连续多次调用。
-- **思考过程**：规划要调用的函数序列及参数。**必须明确说明每一步的目的和依赖关系**，例如：“第一步：使用 \`web_search\` 搜索天气信息。第二步：使用 \`submit_post\` 将搜索到的天气信息发布成帖子。”
-- **正式回复**：在思考结束后，**一次只调用序列中的一个工具**。你将在下一轮得到该工具的结果，然后才能调用序列中的下一个工具。
-- **禁止模拟**：禁止在思考中模拟工具调用，只在回复中真实调用。
+## 用户交流语言
+**服务描述用词**：
+- "正在为您查询天气" / "为您搜索相关信息" / "正在发布帖子"
+- "发布到相关讨论区" / "提交到合适板块" / "选择对应分类"
+- "已为您完成" / "服务执行成功" / "操作已处理"
 
-【顺序调用范例：发布天气预报帖子】
-用户需求：“帮我查一下北京明天的天气，然后发个帖子告诉大家。”
-你的思考过程：
-1.  **规划**：这是一个两步任务。
-    -   **第一步**：需要调用 \`get_weather\` 工具，获取北京的天气信息。
-    -   **第二步**：需要调用 \`submit_post\` 工具，将第一步获取到的天气信息作为内容发布出去。
-2.  **执行第一步**：我将先调用 \`get_weather(location='北京')\`。
-(在此处结束思考，并在回复中调用 \`get_weather\` 工具)
----
-(接收到 \`get_weather\` 的结果后，进入下一轮)
----
-你的思考过程：
-1.  **回顾**：我已经获取了天气信息：“明天晴，25度”。
-2.  **执行第二步**：现在我将调用 \`submit_post\` 工具来发布帖子。
-(在此处结束思考，并在回复中调用 \`submit_post\` 工具)
+**进展说明方式**：
+- 简要说明当前步骤和预期结果
+- 使用温暖自然的服务语调
+- 重点关注用户能获得什么，而不是系统如何实现
 
-【自主决策权限】
-✅ 自动判断并补全反馈类型、板块分类、紧急程度。
-✅ 根据上下文推测用户姓名、联系方式。
-✅ 智能选择线上/线下求助方式。
-✅ 自动生成标题、优化内容格式。
+## 执行模式
+- 搜索需求 → 立即搜索
+- 发帖需求 → 搜索信息后自动整理发布
+- 查询需求 → 直接查询并提供结果
+- 反馈需求 → 收集必要信息后提交
 
-【智能补全规则】
-- **姓名缺失** → 使用"用户"、"求助者"等通用称呼。
-- **电话缺失** → 使用"平台客服电话"作为联系方式。
-- **地址模糊** → 根据描述推测大概区域。
-- **分类不明** → 选择最可能的默认选项。
-- **紧急程度** → 根据语气词汇自动判断。
+**专注执行，少想多做！**
 
-【极速执行流程】
-1. **分析拆解**：分析需求，将其拆解为逻辑上连续的工具调用步骤（Step 1, Step 2, ...）。
-2. **执行首个步骤**：在回复中调用第一个步骤（Step 1）的函数工具。
-3. **循环执行**：接收到上一步的工具执行结果后，思考并执行下一个步骤的工具，直到所有步骤完成。
-4. **最终回复**：所有工具步骤执行完毕后，整合所有结果，向用户提供最终的、完整的答案。
-5. **简短说明**：在每次调用工具时，简要告知用户正在执行的操作（例如：“正在查询天气...”、“正在为您发布帖子...”）。
-
-【工具限制】
-- 禁用openmanus系列。
-- 必须在回复阶段使用函数工具，思考阶段不能执行。
-
-【思考时间：≤2秒】
-【响应模式：思考 → 工具调用1 → (接收结果并思考) → 工具调用2 → ... → 最终回复】
-
-记住：严格遵循“规划-执行-接收结果-再执行”的顺序调用模式！现在进入极速模式，收到需求立即行动。`;
+现在以全权代理身份为用户提供温暖的服务！
+`;
 
 // 页面上下文处理器
 class PageContextProcessor {
@@ -385,9 +357,11 @@ export async function POST(request: NextRequest) {
   try {
     const { 
       messages, 
-      model = 'deepseek-reasoner', 
-      temperature = 0.7, 
+      model = 'deepseek-chat', 
+      temperature = 0.4, 
       max_tokens = 2048,
+      top_p = 0.8,
+      frequency_penalty = 0.3,
       pageContext
     }: ChatRequest = await request.json();
 
@@ -473,6 +447,8 @@ export async function POST(request: NextRequest) {
       messages: [systemMessage, ...processedMessages],
       temperature,
       max_tokens,
+      top_p,
+      frequency_penalty,
               stream: true,
               tools: TOOL_DEFINITIONS,
               tool_choice: 'auto'
@@ -579,13 +555,13 @@ export async function POST(request: NextRequest) {
               })}\n\n`));
 
                 // 启动任务监控
-                monitorPendingTasks(pendingOpenManusTasks, processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken);
+                monitorPendingTasks(pendingOpenManusTasks, processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
                 keepOpen = true; // 标记保持流式连接
                 return; // 暂停，等待任务完成
               }
 
               // 第三阶段：将工具结果发回DeepSeek继续推理
-              await continueWithToolResults(processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken);
+              await continueWithToolResults(processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
             }
           } else {
             // 没有工具调用，直接完成
@@ -712,7 +688,12 @@ async function monitorPendingTasks(
   controller: any, 
   encoder: any, 
   messageId: string,
-  satoken?: string
+  satoken?: string,
+  model?: string,
+  temperature?: number,
+  max_tokens?: number,
+  top_p?: number,
+  frequency_penalty?: number
 ) {
   console.log('🔍 开始监控pending任务:', taskIds);
     
@@ -765,7 +746,7 @@ async function monitorPendingTasks(
         console.log('🎉 所有OpenManus任务完成，继续DeepSeek推理');
         
         // 继续DeepSeek推理
-        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken);
+        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
     }
   } catch (error) {
       console.error('❌ 监控任务状态失败:', error);
@@ -787,7 +768,12 @@ async function continueWithToolResults(
   controller: any, 
   encoder: any, 
   messageId: string,
-  satoken?: string
+  satoken?: string,
+  model?: string,
+  temperature?: number,
+  max_tokens?: number,
+  top_p?: number,
+  frequency_penalty?: number
 ) {
       try {
     console.log('🔄 使用工具结果继续DeepSeek推理');
@@ -807,7 +793,7 @@ async function continueWithToolResults(
       ...toolResults
     ];
     
-    // 调用DeepSeek继续推理
+    // 调用DeepSeek继续推理，使用与第一阶段相同的参数
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -815,10 +801,12 @@ async function continueWithToolResults(
         'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'deepseek-reasoner',
+        model: model || 'deepseek-reasoner',
         messages: fullMessages,
-        temperature: 0.7,
-        max_tokens: 2048,
+        temperature: temperature || 0.4,
+        max_tokens: max_tokens || 2048,
+        top_p: top_p || 0.8,
+        frequency_penalty: frequency_penalty || 0.3,
         stream: true,
         tools: TOOL_DEFINITIONS,
         tool_choice: 'auto'
@@ -910,12 +898,12 @@ async function continueWithToolResults(
           messageId
         })}\n\n`));
 
-        await monitorPendingTasks(pendingOpenManusTasks, fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken);
+        await monitorPendingTasks(pendingOpenManusTasks, fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
         return; // monitorPendingTasks 内部会在完成后继续递归
       }
 
       // 递归进入下一阶段
-      await continueWithToolResults(fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken);
+      await continueWithToolResults(fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
       return;
     }
 
