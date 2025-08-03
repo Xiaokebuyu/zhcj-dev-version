@@ -357,17 +357,19 @@ export async function POST(request: NextRequest) {
   try {
     const { 
       messages, 
-      model = 'deepseek-chat', 
-      temperature = 0.4, 
+      thinking = {"type": "auto"},
+      model = 'doubao-seed-1-6-250615', 
+      temperature = 1.0, 
       max_tokens = 2048,
-      top_p = 0.8,
-      frequency_penalty = 0.3,
+      // top_p = 0.8,
+      // frequency_penalty = 0.3,
       pageContext
     }: ChatRequest = await request.json();
 
     console.log('🚀 收到聊天请求:', {
       messagesCount: messages?.length,
       model,
+      thinking,
       hasPageContext: !!pageContext
     });
 
@@ -433,23 +435,24 @@ export async function POST(request: NextRequest) {
         let keepOpen = false; // 如果存在pending任务保持流打开
 
         try {
-          console.log('📤 发送DeepSeek请求（第一阶段 - 推理和工具调用）');
+          console.log('📤 发送DeepSeek请求（第一阶段 - 推理和工具调用）', { thinking });
           
           // 第一阶段：DeepSeek推理，可能包含工具调用
-          const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+          const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+              'Authorization': `Bearer ${process.env.DouBao_API_KEY}`,
             },
             body: JSON.stringify({
       model,
       messages: [systemMessage, ...processedMessages],
-      temperature,
+            temperature,
       max_tokens,
-      top_p,
-      frequency_penalty,
-              stream: true,
+      thinking,
+      // ...(top_p !== undefined && { top_p }),
+      // ...(frequency_penalty !== undefined && { frequency_penalty }),
+      stream: true,
               tools: TOOL_DEFINITIONS,
               tool_choice: 'auto'
             })
@@ -555,13 +558,42 @@ export async function POST(request: NextRequest) {
               })}\n\n`));
 
                 // 启动任务监控
-                monitorPendingTasks(pendingOpenManusTasks, processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
+                monitorPendingTasks(
+                  pendingOpenManusTasks, 
+                  processedMessages, 
+                  validToolCalls, 
+                  toolResults, 
+                  controller, 
+                  encoder, 
+                  messageId, 
+                  satoken, 
+                  model, 
+                  temperature, 
+                  max_tokens,
+                  thinking
+                  // top_p,
+                  // frequency_penalty
+                );
                 keepOpen = true; // 标记保持流式连接
                 return; // 暂停，等待任务完成
               }
 
               // 第三阶段：将工具结果发回DeepSeek继续推理
-              await continueWithToolResults(processedMessages, validToolCalls, toolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
+              await continueWithToolResults(
+                processedMessages, 
+                validToolCalls, 
+                toolResults, 
+                controller, 
+                encoder, 
+                messageId, 
+                satoken, 
+                model, 
+                temperature, 
+                max_tokens,
+                thinking
+                // top_p,
+                // frequency_penalty
+              );
             }
           } else {
             // 没有工具调用，直接完成
@@ -692,8 +724,9 @@ async function monitorPendingTasks(
   model?: string,
   temperature?: number,
   max_tokens?: number,
-  top_p?: number,
-  frequency_penalty?: number
+  thinking?: any
+  // top_p?: number,
+  // frequency_penalty?: number
 ) {
   console.log('🔍 开始监控pending任务:', taskIds);
     
@@ -746,7 +779,10 @@ async function monitorPendingTasks(
         console.log('🎉 所有OpenManus任务完成，继续DeepSeek推理');
         
         // 继续DeepSeek推理
-        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
+        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, thinking
+          // top_p,
+          // frequency_penalty
+        );
     }
   } catch (error) {
       console.error('❌ 监控任务状态失败:', error);
@@ -772,11 +808,12 @@ async function continueWithToolResults(
   model?: string,
   temperature?: number,
   max_tokens?: number,
-  top_p?: number,
-  frequency_penalty?: number
+  thinking?: any
+  // top_p?: number,
+  // frequency_penalty?: number
 ) {
       try {
-    console.log('🔄 使用工具结果继续DeepSeek推理');
+    console.log('🔄 使用工具结果继续DeepSeek推理', { thinking });
     
     // 构建完整的消息历史（确保始终包含系统提示词）
     const baseMessages = (messages.length > 0 && messages[0].role === 'system')
@@ -794,19 +831,20 @@ async function continueWithToolResults(
     ];
     
     // 调用DeepSeek继续推理，使用与第一阶段相同的参数
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        'Authorization': `Bearer ${process.env.DouBao_API_KEY}`,
       },
       body: JSON.stringify({
         model: model || 'deepseek-reasoner',
         messages: fullMessages,
         temperature: temperature || 0.4,
         max_tokens: max_tokens || 2048,
-        top_p: top_p || 0.8,
-        frequency_penalty: frequency_penalty || 0.3,
+        thinking,
+        // ...(top_p !== undefined && { top_p }),
+        // ...(frequency_penalty !== undefined && { frequency_penalty }),
         stream: true,
         tools: TOOL_DEFINITIONS,
         tool_choice: 'auto'
@@ -898,12 +936,41 @@ async function continueWithToolResults(
           messageId
         })}\n\n`));
 
-        await monitorPendingTasks(pendingOpenManusTasks, fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
+        await monitorPendingTasks(
+          pendingOpenManusTasks, 
+          fullMessages, 
+          validToolCalls, 
+          newToolResults, 
+          controller, 
+          encoder, 
+          messageId, 
+          satoken, 
+          model, 
+          temperature, 
+          max_tokens,
+          thinking
+          // top_p,
+          // frequency_penalty
+        );
         return; // monitorPendingTasks 内部会在完成后继续递归
       }
 
       // 递归进入下一阶段
-      await continueWithToolResults(fullMessages, validToolCalls, newToolResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, top_p, frequency_penalty);
+      await continueWithToolResults(
+        fullMessages, 
+        validToolCalls, 
+        newToolResults, 
+        controller, 
+        encoder, 
+        messageId, 
+        satoken, 
+        model, 
+        temperature, 
+        max_tokens,
+        thinking
+        // top_p,
+        // frequency_penalty
+      );
       return;
     }
 

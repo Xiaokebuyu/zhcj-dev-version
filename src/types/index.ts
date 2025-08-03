@@ -176,6 +176,7 @@ export interface ChatRequest {
     role: 'user' | 'assistant' | 'system';
     content: string;
   }>;
+  thinking?: {"type": "disabled" | "auto" | "enabled"};
   model?: string;
   temperature?: number;
   max_tokens?: number;
