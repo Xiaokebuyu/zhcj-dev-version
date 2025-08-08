@@ -14,6 +14,8 @@ interface UnifiedMessageProps {
   onToggleReasoning?: () => void;
   onPlayAudio?: (audioUrl: string) => void;
   onRegenerateAudio?: (messageId: string, text: string) => void;
+  // 展示变体：分组内的子卡片或独立消息
+  variant?: 'standalone' | 'grouped';
 }
 
 // 读取OpenManus后端地址（构建时注入），默认本地8001
@@ -23,7 +25,8 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   message,
   onToggleReasoning,
   onPlayAudio,
-  onRegenerateAudio
+  onRegenerateAudio,
+  variant = 'standalone'
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const finalMessageRef = useRef<HTMLDivElement>(null);
@@ -192,10 +195,14 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   const renderReasoning = () => {
     if (!message.reasoningContent) return null;
 
+    const cardMargin = variant === 'grouped' ? 'mb-2' : 'mb-4';
+    const headerPadding = variant === 'grouped' ? 'p-2' : 'p-3';
+    const bodyPadding = variant === 'grouped' ? 'p-3' : 'p-4';
+
     return (
-      <div className="mb-4 bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className={`${cardMargin} ${variant==='grouped' ? 'rounded-none border-0' : 'rounded-lg border border-gray-200'} bg-white overflow-hidden`}>
         <div 
-          className="flex items-center justify-between p-3 bg-gray-50 border-b border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors"
+          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
           onClick={onToggleReasoning}
         >
           <div className="flex items-center gap-2">
@@ -226,7 +233,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
         {!message.isCollapsed && (
           <div 
             ref={contentRef}
-            className="p-4 max-h-64 overflow-y-auto text-sm text-gray-700 leading-relaxed whitespace-pre-wrap"
+            className={`${bodyPadding} ${variant==='grouped' ? '' : ''} max-h-64 overflow-y-auto text-sm text-gray-700 leading-relaxed whitespace-pre-wrap`}
           >
             {message.reasoningContent}
             {!message.isReasoningComplete && (
@@ -242,7 +249,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   const renderToolExecution = () => {
     if (!message.toolExecution) return null;
 
-    // 检测 OpenManus 任务
+    // （暂不展示 OpenManus 日志）如需启用可恢复以下逻辑
     const openManusTasks = message.toolExecution.results
       .map((r: any) => {
         let obj: any;
@@ -251,19 +258,23 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
         } else if (r.content) {
           try { obj = JSON.parse(r.content); } catch { obj = null; }
         }
-
-        // 如果是数组（executeOpenManusTools包装结果），取首个元素解析
         if (Array.isArray(obj) && obj.length > 0) {
           try { obj = JSON.parse(obj[0].content); } catch { obj = null; }
         }
-
         return obj && obj.task_id ? { taskId: obj.task_id, status: obj.status } : null;
       })
       .filter(Boolean) as Array<{ taskId: string; status: string }>;
 
+    const cardMargin = variant === 'grouped' ? 'mb-2' : 'mb-4';
+    const headerPadding = variant === 'grouped' ? 'p-2' : 'p-3';
+    const bodyPadding = variant === 'grouped' ? 'p-3' : 'p-4';
+
     return (
-      <div className="mb-4 bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <div className="p-3 bg-gray-50 border-b border-gray-100">
+      <div className={`${cardMargin} ${variant==='grouped' ? 'rounded-none border-0' : 'rounded-lg border border-gray-200'} bg-white overflow-hidden`}>
+        <div
+          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
+          onClick={onToggleReasoning}
+        >
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-gray-600" />
             <span className="text-sm font-medium text-gray-700">
@@ -275,41 +286,51 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
                message.toolExecution.status === 'completed' ? '已完成' : '执行失败'}
             </span>
           </div>
+          <button className="p-1 rounded hover:bg-gray-200 transition-colors">
+            {message.isCollapsed ? (
+              <ChevronRight className="w-4 h-4 text-gray-500" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            )}
+          </button>
         </div>
-        
-        <div className="p-4 space-y-4">
-          {message.toolExecution.toolCalls.map((toolCall, index) => (
-            <div key={toolCall.id} className="mb-3 last:mb-0">
-              <div className="text-sm font-medium text-gray-700 mb-1">
-                {getToolDisplayName(toolCall.function.name)}
-              </div>
-              <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
-                {JSON.stringify(JSON.parse(toolCall.function.arguments), null, 2)}
-              </div>
-            </div>
-          ))}
 
-          {/* OpenManus 任务日志显示 */}
-          {openManusTasks.map(({ taskId, status }) => {
-            const logs = taskLogs[taskId] || [];
-            const visible = logVisibility[taskId] ?? false;
-            const toggleVisibility = () => setLogVisibility(prev => ({ ...prev, [taskId]: !visible }));
-
-            return (
-              <div key={taskId} className="border-t border-gray-200 pt-3">
-                <div className="flex items-center justify-between cursor-pointer" onClick={toggleVisibility}>
-                  <span className="text-xs text-gray-600">OpenManus 任务 {taskId.slice(0,8)}… ({status || '运行中'})</span>
-                  <button className="text-blue-600 text-xs">{visible ? '隐藏日志' : '查看日志'}</button>
+        {!message.isCollapsed && (
+          <div className={`${bodyPadding} space-y-4`}>
+            {message.toolExecution.toolCalls.map((toolCall) => (
+              <div key={toolCall.id} className="mb-3 last:mb-0">
+                <div className="text-sm font-medium text-gray-700 mb-1">
+                  {getToolDisplayName(toolCall.function.name)}
                 </div>
-                {visible && (
-                  <pre className="mt-2 max-h-52 overflow-y-auto text-xs bg-gray-50 p-2 rounded text-gray-700 whitespace-pre-wrap">
-                    {logs.length === 0 ? '等待日志...' : logs.join('\n')}
-                  </pre>
-                )}
+                <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                  {(() => {
+                    try { return JSON.stringify(JSON.parse(toolCall.function.arguments), null, 2); }
+                    catch { return toolCall.function.arguments; }
+                  })()}
+                </div>
               </div>
-            );
-          })}
-        </div>
+            ))}
+
+            {false && openManusTasks.map(({ taskId, status }) => {
+              const logs = taskLogs[taskId] || [];
+              const visible = logVisibility[taskId] ?? false;
+              const toggleVisibility = () => setLogVisibility(prev => ({ ...prev, [taskId]: !visible }));
+              return (
+                <div key={taskId} className="border-t border-gray-200 pt-3">
+                  <div className="flex items-center justify-between cursor-pointer" onClick={toggleVisibility}>
+                    <span className="text-xs text-gray-600">OpenManus 任务 {taskId.slice(0,8)}… ({status || '运行中'})</span>
+                    <button className="text-blue-600 text-xs">{visible ? '隐藏日志' : '查看日志'}</button>
+                  </div>
+                  {visible && (
+                    <pre className="mt-2 max-h-52 overflow-y-auto text-xs bg-gray-50 p-2 rounded text-gray-700 whitespace-pre-wrap">
+                      {logs.length === 0 ? '等待日志...' : logs.join('\n')}
+                    </pre>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };

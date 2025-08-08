@@ -62,65 +62,109 @@ const ChatView: React.FC<ChatViewProps> = ({
   toggleReasoning,
   playAudio,
   regenerateAudio
-}) => (
-  <div
-    className="flex-1 overflow-y-auto p-6"
-    ref={messagesContainerRef}
-    onWheel={(e) => e.stopPropagation()}
-    onTouchStart={(e) => e.stopPropagation()}
-    onTouchMove={(e) => e.stopPropagation()}
-  >
-    {/* 页面上下文状态 */}
-    {renderContextStatus()}
+}) => {
+  const isGroupType = (t: string | undefined) => t === 'reasoning' || t === 'tool_execution';
 
-    {/* 实时转录显示区域 */}
-    {renderTranscriptDisplay()}
-
-    <div className="space-y-4">
-      {messages.length === 0 ? (
-        <div className="text-center py-8">
-          <div className="w-16 h-16 bg-gradient-to-r from-orange-100 to-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <MessageCircle size={24} className="text-orange-500" strokeWidth={2} />
+  // 将相邻的 reasoning/tool_execution 消息归成轻量容器
+  const buildNodes = () => {
+    const nodes: React.ReactNode[] = [];
+    let i = 0;
+    while (i < messages.length) {
+      const m = messages[i];
+      if (isGroupType(m.messageType)) {
+        const group: typeof messages = [m];
+        let j = i + 1;
+        while (j < messages.length && isGroupType(messages[j].messageType)) {
+          group.push(messages[j]);
+          j++;
+        }
+        nodes.push(
+          <div key={`grp_${m.id}`} className="flex gap-3">
+            {/* 左侧占位，保证与普通消息头像对齐，从而宽度与最终回复一致 */}
+            <div className="w-8 h-8" />
+            <div className="flex-1">
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100">
+                {group.map((gm) => (
+                  <UnifiedMessage
+                    key={gm.id}
+                    message={gm}
+                    onToggleReasoning={() => toggleReasoning(gm.id)}
+                    onPlayAudio={playAudio}
+                    onRegenerateAudio={regenerateAudio}
+                    variant="grouped"
+                  />
+                ))}
+              </div>
+            </div>
           </div>
-          <p className="text-gray-600 text-sm leading-relaxed">
-            你好！我是你的 AI 助手<br />
-            {pageContext ? '我可以帮你分析当前页面内容，或回答其他问题' : '有什么可以帮助你的吗？'}
-          </p>
-        </div>
-      ) : (
-        messages.map((message) => (
+        );
+        i = j;
+      } else {
+        nodes.push(
           <UnifiedMessage
-            key={message.id}
-            message={message}
-            onToggleReasoning={() => toggleReasoning(message.id)}
+            key={m.id}
+            message={m}
+            onToggleReasoning={() => toggleReasoning(m.id)}
             onPlayAudio={playAudio}
             onRegenerateAudio={regenerateAudio}
+            variant="standalone"
           />
-        ))
-      )}
+        );
+        i += 1;
+      }
+    }
+    return nodes;
+  };
 
-      {isLoading && (
-        <div className="flex justify-start animate-in fade-in duration-300">
-          <div className="flex gap-3">
-            <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
-              <span className="text-white text-xs font-bold">AI</span>
+  return (
+    <div
+      className="flex-1 overflow-y-auto p-6"
+      ref={messagesContainerRef}
+      onWheel={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+    >
+      {renderContextStatus()}
+      {renderTranscriptDisplay()}
+
+      <div className="space-y-4">
+        {messages.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="w-16 h-16 bg-gradient-to-r from-orange-100 to-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <MessageCircle size={24} className="text-orange-500" strokeWidth={2} />
             </div>
-            <div className="bg-white border border-gray-100 px-4 py-3 rounded-2xl rounded-bl-md text-sm text-gray-600 shadow-sm">
-              <div className="flex items-center gap-1">
-                正在思考
-                <div className="flex gap-1">
-                  <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+            <p className="text-gray-600 text-sm leading-relaxed">
+              你好！我是你的 AI 助手<br />
+              {pageContext ? '我可以帮你分析当前页面内容，或回答其他问题' : '有什么可以帮助你的吗？'}
+            </p>
+          </div>
+        ) : (
+          buildNodes()
+        )}
+
+        {isLoading && (
+          <div className="flex justify-start animate-in fade-in duration-300">
+            <div className="flex gap-3">
+              <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
+                <span className="text-white text-xs font-bold">AI</span>
+              </div>
+              <div className="bg-white border border-gray-100 px-4 py-3 rounded-2xl rounded-bl-md text-sm text-gray-600 shadow-sm">
+                <div className="flex items-center gap-1">
+                  正在思考
+                  <div className="flex gap-1">
+                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                    <div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default function FloatingAssistant({ config = {}, onError, initialOpen = false, contextPayload }: FloatingAssistantProps) {
   const [isOpen, setIsOpen] = useState(initialOpen);
