@@ -32,6 +32,43 @@ interface ToolCall {
   };
 }
 
+// 兼容 Kimi 的消息清洗：移除空的 assistant 消息，规范 tool 消息
+function sanitizeMessagesForKimi(rawMessages: any[]): any[] {
+  const sanitized: any[] = [];
+  for (const msg of rawMessages || []) {
+    if (!msg || !msg.role) continue;
+    // 统一确保 content 为字符串
+    let content = msg.content;
+    if (content === undefined || content === null) content = '';
+    if (typeof content !== 'string') {
+      try { content = JSON.stringify(content); } catch { content = String(content); }
+    }
+
+    if (msg.role === 'assistant') {
+      const hasToolCalls = Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0;
+      if (!content.trim()) {
+        if (hasToolCalls) {
+          sanitized.push({ ...msg, content: '调用工具' });
+        }
+        // 没有内容且没有工具调用的 assistant，直接丢弃
+        continue;
+      }
+      sanitized.push({ ...msg, content });
+      continue;
+    }
+
+    if (msg.role === 'tool') {
+      const toolCallId = (msg as any).tool_call_id;
+      sanitized.push({ ...msg, content, tool_call_id: toolCallId });
+      continue;
+    }
+
+    // 其他角色（system/user），保留并确保 content 为字符串
+    sanitized.push({ ...msg, content });
+  }
+  return sanitized;
+}
+
 // Helper 函数
 async function parseStream(
   reader: ReadableStreamDefaultReader,
@@ -207,7 +244,7 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-// 👇 新增：统一的系统提示词常量，确保每次调用 DeepSeek 都能携带相同的系统级约束
+// 👇 新增：统一的系统提示词常量，确保每次调用 Kimi 都能携带相同的系统级约束
 const SYSTEM_PROMPT = `
 # 智慧残健平台全权AI代理
 
@@ -357,8 +394,7 @@ export async function POST(request: NextRequest) {
   try {
     const { 
       messages, 
-      thinking = {"type": "auto"},
-      model = 'doubao-seed-1-6-250615', 
+      model = 'kimi-k2-turbo-preview', 
       temperature = 1.0, 
       max_tokens = 2048,
       // top_p = 0.8,
@@ -369,7 +405,6 @@ export async function POST(request: NextRequest) {
     console.log('🚀 收到聊天请求:', {
       messagesCount: messages?.length,
       model,
-      thinking,
       hasPageContext: !!pageContext
     });
 
@@ -391,8 +426,8 @@ export async function POST(request: NextRequest) {
     }
 
     // 检查 API 密钥
-    if (!process.env.DEEPSEEK_API_KEY) {
-      console.error('❌ DeepSeek API 密钥未配置');
+    if (!process.env.MOONSHOT_API_KEY) {
+      console.error('❌ Kimi API 密钥未配置');
       return NextResponse.json({
         message: '抱歉，AI 服务配置有误。',
         messageId: Date.now().toString(),
@@ -435,31 +470,33 @@ export async function POST(request: NextRequest) {
         let keepOpen = false; // 如果存在pending任务保持流打开
 
         try {
-          console.log('📤 发送DeepSeek请求（第一阶段 - 推理和工具调用）', { thinking });
+          console.log('📤 发送Kimi请求（第一阶段 - 推理和工具调用）');
           
-          // 第一阶段：DeepSeek推理，可能包含工具调用
-          const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+          // 第一阶段：Kimi推理，可能包含工具调用
+          const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${process.env.DouBao_API_KEY}`,
+              'Authorization': `Bearer ${process.env.MOONSHOT_API_KEY}`,
             },
             body: JSON.stringify({
-      model,
-      messages: [systemMessage, ...processedMessages],
-            temperature,
-      max_tokens,
-      thinking,
-      // ...(top_p !== undefined && { top_p }),
-      // ...(frequency_penalty !== undefined && { frequency_penalty }),
-      stream: true,
+              model,
+              messages: sanitizeMessagesForKimi([systemMessage, ...processedMessages]),
+              temperature,
+              max_tokens,
+              // ...(top_p !== undefined && { top_p }),
+              // ...(frequency_penalty !== undefined && { frequency_penalty }),
+              stream: true,
               tools: TOOL_DEFINITIONS,
               tool_choice: 'auto'
             })
           });
 
           if (!response.ok) {
-            throw new Error(`DeepSeek API错误: ${response.status}`);
+            let errorBody = '';
+            try { errorBody = await response.text(); } catch {}
+            console.error('Kimi API响应错误(第一阶段):', response.status, errorBody);
+            throw new Error(`Kimi API错误: ${response.status}`);
           }
 
           // 处理流式响应
@@ -569,8 +606,7 @@ export async function POST(request: NextRequest) {
                   satoken, 
                   model, 
                   temperature, 
-                  max_tokens,
-                  thinking
+                  max_tokens
                   // top_p,
                   // frequency_penalty
                 );
@@ -578,19 +614,22 @@ export async function POST(request: NextRequest) {
                 return; // 暂停，等待任务完成
               }
 
-              // 第三阶段：将工具结果发回DeepSeek继续推理
+              // 第三阶段：将工具结果发回Kimi继续推理
               await continueWithToolResults(
                 processedMessages, 
                 validToolCalls, 
-                toolResults, 
+                // 适配工具结果结构: ensure tool_call_id + content 字符串
+                toolResults.map((r: any) => ({
+                  ...r,
+                  content: typeof r.content === 'string' ? r.content : JSON.stringify(r.content)
+                })), 
                 controller, 
                 encoder, 
                 messageId, 
                 satoken, 
                 model, 
                 temperature, 
-                max_tokens,
-                thinking
+                max_tokens
                 // top_p,
                 // frequency_penalty
               );
@@ -723,8 +762,7 @@ async function monitorPendingTasks(
   satoken?: string,
   model?: string,
   temperature?: number,
-  max_tokens?: number,
-  thinking?: any
+  max_tokens?: number
   // top_p?: number,
   // frequency_penalty?: number
 ) {
@@ -776,10 +814,10 @@ async function monitorPendingTasks(
       
       if (allCompleted) {
         clearInterval(checkInterval);
-        console.log('🎉 所有OpenManus任务完成，继续DeepSeek推理');
+        console.log('🎉 所有OpenManus任务完成，继续Kimi推理');
         
-        // 继续DeepSeek推理
-        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens, thinking
+        // 继续Kimi推理
+        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens
           // top_p,
           // frequency_penalty
         );
@@ -796,7 +834,7 @@ async function monitorPendingTasks(
   }, 300000);
   }
 
-// 🔑 带工具结果继续DeepSeek推理
+// 🔑 带工具结果继续Kimi推理
 async function continueWithToolResults(
   messages: any[], 
   toolCalls: ToolCall[], 
@@ -807,42 +845,56 @@ async function continueWithToolResults(
   satoken?: string,
   model?: string,
   temperature?: number,
-  max_tokens?: number,
-  thinking?: any
+  max_tokens?: number
   // top_p?: number,
   // frequency_penalty?: number
 ) {
       try {
-    console.log('🔄 使用工具结果继续DeepSeek推理', { thinking });
+    console.log('🔄 使用工具结果继续Kimi推理');
     
     // 构建完整的消息历史（确保始终包含系统提示词）
     const baseMessages = (messages.length > 0 && messages[0].role === 'system')
       ? messages
       : [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
 
-    const fullMessages = [
+    // 将工具执行结果转换为 Kimi 期望的 tool 消息
+    const toolMessages = (toolResults || []).map((result: any) => {
+      const toolCallId = result.tool_call_id || result.id;
+      let contentString: string;
+      try {
+        contentString = typeof result.content === 'string' ? result.content : JSON.stringify(result.content ?? '');
+      } catch {
+        contentString = String(result.content ?? '');
+      }
+      return {
+        role: 'tool',
+        content: contentString,
+        tool_call_id: toolCallId
+      };
+    });
+
+    const fullMessages = sanitizeMessagesForKimi([
       ...baseMessages,
       {
         role: 'assistant',
-        content: '',
+        content: toolCalls.length > 0 ? '调用工具' : '(无工具调用)',
         tool_calls: toolCalls
       },
-      ...toolResults
-    ];
+      ...toolMessages
+    ]);
     
-    // 调用DeepSeek继续推理，使用与第一阶段相同的参数
-    const response = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+    // 调用Kimi继续推理，使用与第一阶段相同的参数
+    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DouBao_API_KEY}`,
+        'Authorization': `Bearer ${process.env.MOONSHOT_API_KEY}`,
       },
       body: JSON.stringify({
-        model: model || 'deepseek-reasoner',
+        model: model || 'kimi-k2-turbo-preview',
         messages: fullMessages,
-        temperature: temperature || 0.4,
+        temperature: temperature || 0.6,
         max_tokens: max_tokens || 2048,
-        thinking,
         // ...(top_p !== undefined && { top_p }),
         // ...(frequency_penalty !== undefined && { frequency_penalty }),
         stream: true,
@@ -852,7 +904,10 @@ async function continueWithToolResults(
     });
     
     if (!response.ok) {
-      throw new Error(`DeepSeek API错误: ${response.status}`);
+      let errorBody = '';
+      try { errorBody = await response.text(); } catch {}
+      console.error('Kimi API响应错误(续写):', response.status, errorBody);
+      throw new Error(`Kimi API错误: ${response.status}`);
     }
     
     // 处理续写的流式响应
@@ -947,8 +1002,7 @@ async function continueWithToolResults(
           satoken, 
           model, 
           temperature, 
-          max_tokens,
-          thinking
+          max_tokens
           // top_p,
           // frequency_penalty
         );
@@ -966,8 +1020,7 @@ async function continueWithToolResults(
         satoken, 
         model, 
         temperature, 
-        max_tokens,
-        thinking
+        max_tokens
         // top_p,
         // frequency_penalty
       );
@@ -981,11 +1034,11 @@ async function continueWithToolResults(
       messageId
     })}\n\n`));
 
-    console.log('✅ DeepSeek推理完成');
+    console.log('✅ Kimi推理完成');
 
     controller.close();
   } catch (error) {
-    console.error('❌ 续写DeepSeek推理失败:', error);
+    console.error('❌ 续写Kimi推理失败:', error);
     controller.enqueue(encoder.encode(`data: ${JSON.stringify({
       type: 'error',
       error: error instanceof Error ? error.message : '续写失败',
@@ -998,7 +1051,7 @@ export async function GET() {
   return NextResponse.json({ 
     message: '聊天API运行正常',
     timestamp: new Date().toISOString(),
-    supportedModels: ['deepseek-reasoner'],
+    supportedModels: ['kimi-k2-turbo-preview'],
     features: ['工具调用', '流式响应', 'OpenManus集成']
   });
 }
