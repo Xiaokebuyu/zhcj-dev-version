@@ -223,6 +223,66 @@ const TOOL_DEFINITIONS = [
       }
     }
   },
+  // ===== TodoWrite 工具 =====
+  {
+    type: "function",
+    function: {
+      name: "create_todo_list",
+      description: "创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "任务清单标题，简明扼要地描述整个任务目标" },
+          tasks: { type: "array", items: { type: "string" }, description: "按执行顺序排列的任务步骤，每个步骤用一句话描述，用户友好语言" }
+        },
+        required: ["title", "tasks"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "complete_todo_task",
+      description: "标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
+      parameters: {
+        type: "object",
+        properties: {
+          todo_id: { type: "string", description: "任务清单ID" },
+          task_id: { type: "string", description: "已完成的任务ID" },
+          completion_note: { type: "string", description: "完成说明，简要描述完成了什么" }
+        },
+        required: ["todo_id", "task_id"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_todo_task",
+      description: "向现有任务清单添加新任务。当发现需要额外步骤时使用。",
+      parameters: {
+        type: "object",
+        properties: {
+          todo_id: { type: "string", description: "目标任务清单ID" },
+          task_description: { type: "string", description: "新任务的描述" }
+        },
+        required: ["todo_id", "task_description"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_todo_status",
+      description: "获取当前任务清单的状态和进度",
+      parameters: {
+        type: "object",
+        properties: {
+          todo_id: { type: "string", description: "任务清单ID，留空获取当前活跃的清单" }
+        }
+      }
+    }
+  },
   {
     type: "function",
     function: {
@@ -244,12 +304,31 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-// 👇 新增：统一的系统提示词常量，确保每次调用 Kimi 都能携带相同的系统级约束
+// 👇 新增：统一的系统提示词常量，加入 TodoWrite 原则
 const SYSTEM_PROMPT = `
 # 智慧残健平台全权AI代理
 
 ## 核心理念
 你是高效且温暖的执行者，专注解决用户问题，不纠结技术实现。
+
+## TodoWrite任务管理原则
+### 复杂任务识别
+当用户需求包含以下特征时，必须创建任务清单：
+- 需要多个步骤才能完成
+- 涉及工具调用（搜索、发帖、查询等）
+- 用户说"帮我..."、"我想要..."、"需要完成..."
+
+### 执行模式
+1. 理解用户需求 → 立即调用create_todo_list创建任务清单
+2. 开始执行第一个任务
+3. 完成后立即调用complete_todo_task更新状态
+4. 继续下一个任务直到全部完成
+
+### 任务分解原则
+- 每个任务是一个有意义的完整操作
+- 一般分解为3-6个步骤
+- 用用户友好语言描述
+- 避免技术性术语
 
 ## 执行权限  
 - 拥有完整平台功能调用权限
@@ -258,28 +337,9 @@ const SYSTEM_PROMPT = `
 
 ## 决策原则
 **结果导向**：用户要什么结果，就直接朝着那个目标执行
-**信任工具**：平台工具都能正常工作，不必担心技术细节（openmanus系列工具目前无法工作，请不要使用）
-**减少确认**：除电话号码等关键信息外，直接执行
-**流程简化**：多步骤任务按逻辑顺序完成，每步简要说明进展
-
-## 用户交流语言
-**服务描述用词**：
-- "正在为您查询天气" / "为您搜索相关信息" / "正在发布帖子"
-- "发布到相关讨论区" / "提交到合适板块" / "选择对应分类"
-- "已为您完成" / "服务执行成功" / "操作已处理"
-
-**进展说明方式**：
-- 简要说明当前步骤和预期结果
-- 使用温暖自然的服务语调
-- 重点关注用户能获得什么，而不是系统如何实现
-
-## 执行模式
-- 搜索需求 → 立即搜索
-- 发帖需求 → 搜索信息后自动整理发布
-- 查询需求 → 直接查询并提供结果
-- 反馈需求 → 收集必要信息后提交
-
-**专注执行，少想多做！**
+**信任工具**：平台工具都能正常工作，不必担心技术细节
+**减少确认**：除关键信息外，直接按清单执行
+**透明执行**：通过任务清单让用户看到整个过程
 
 现在以全权代理身份为用户提供温暖的服务！
 `;

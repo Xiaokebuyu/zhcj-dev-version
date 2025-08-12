@@ -42,6 +42,13 @@ export interface UnifiedChatResponse {
   full_content?: string;
   phase?: string;
   post_tool_reasoning?: string;
+  // TodoWrite 扩展事件（用于前端渲染）
+  todo_update?: {
+    type: 'todo_created' | 'task_completed' | 'task_added';
+    // 使用 any 以避免循环依赖；实际类型为 TodoList
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    todoList: any;
+  };
 }
 
 export interface ToolProgress {
@@ -474,6 +481,9 @@ export interface DoubaoWebSocketMessage {
   error?: string;
   timestamp: number;
 }
+
+// 导出 TodoWrite 类型
+export * from './todo';
 
 // 新的统一消息类型 - 替换现有的ChatMessage
 export interface ReasoningChatMessage extends ChatMessage {

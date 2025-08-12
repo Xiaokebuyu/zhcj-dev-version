@@ -3,6 +3,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { MessageCircle, X, Search, Send, Mic, Copy, ThumbsUp, ThumbsDown, ChevronRight, FileText, Volume2, VolumeX, Settings, Square, RefreshCw, Phone, Sparkles, Minus } from 'lucide-react';
 import { ReasoningChatMessage, AssistantConfig, VoiceState, VoiceSettings, STTConfig, StreamingSTTEvent, ToolCall, ToolProgress, PageContext, ContextStatus, ChatRequest, AssistantMode, VoiceCallState, DoubaoVoiceConfig, UnifiedChatResponse } from '@/types';
+import { TodoList } from '@/types/todo';
+import { TodoDisplay } from '@/components/TodoDisplay';
 
 // 本地类型定义
 interface SearchResult {
@@ -225,6 +227,26 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
   
   // 悬浮按钮局部可点击状态
   const [floatingButtonClickable, setFloatingButtonClickable] = useState(false);
+  // TodoWrite：当前激活的待办清单
+  const [activeTodoList, setActiveTodoList] = useState<TodoList | null>(null);
+  const [isTodoPanelOpen, setIsTodoPanelOpen] = useState<boolean>(false);
+  const todoAutoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // 位置可调：徽章与面板的独立偏移（像素）
+  const BADGE_POS = { right: 16, bottom: 105 };
+  const PANEL_POS = { right: 16, bottom: 105 }; // 建议 = BADGE_POS.bottom + 徽章高度(约32) + 间距
+
+  const openTodoPanelAuto = useCallback(() => {
+    console.log('🪄 自动展开Todo面板 3秒');
+    setIsTodoPanelOpen(true);
+    if (todoAutoCloseTimerRef.current) {
+      clearTimeout(todoAutoCloseTimerRef.current);
+    }
+    todoAutoCloseTimerRef.current = setTimeout(() => {
+      console.log('🪄 自动收起Todo面板');
+      setIsTodoPanelOpen(false);
+      todoAutoCloseTimerRef.current = null;
+    }, 3000);
+  }, []);
 
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1386,6 +1408,29 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
 
                 case 'tool_result':
                   console.log('🔧 工具结果:', parsed.tool_call_id, parsed.result);
+                  // ✅ 捕获 TodoWrite 的 todo_update 并更新本地展示
+                  try {
+                    const r = parsed.result;
+                    if (r && r.todo_update && r.todo_update.todoList) {
+                      const tl = r.todo_update.todoList as TodoList;
+                      console.log('📝 Todo更新事件:', r.todo_update.type, {
+                        id: tl.id,
+                        title: tl.title,
+                        current_task_id: tl.current_task_id,
+                        completed_tasks: tl.completed_tasks,
+                        total_tasks: tl.total_tasks
+                      });
+                      setActiveTodoList(tl);
+                      // 创建或状态更新时自动展开3秒；重复触发会重置计时
+                      if (
+                        r.todo_update.type === 'todo_created' ||
+                        r.todo_update.type === 'task_completed' ||
+                        r.todo_update.type === 'task_added'
+                      ) {
+                        openTodoPanelAuto();
+                      }
+                    }
+                  } catch {}
                   
                 // 更新工具执行结果
                   setMessages(prev => prev.map(msg => {
@@ -2468,7 +2513,82 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
 
             {/* 内容区域 */}
             {assistantMode === 'text' ? (
-              messages.length === 0 ? <InitialView /> : <ChatView messages={messages} messagesContainerRef={messagesContainerRef} renderContextStatus={renderContextStatus} renderTranscriptDisplay={renderTranscriptDisplay} pageContext={pageContext} isLoading={isLoading} toggleReasoning={toggleReasoning} playAudio={playAudio} regenerateAudio={regenerateSpeech} />
+              <>
+                {messages.length === 0 ? (
+                  <InitialView />
+                ) : (
+                  <ChatView
+                    messages={messages}
+                    messagesContainerRef={messagesContainerRef}
+                    renderContextStatus={renderContextStatus}
+                    renderTranscriptDisplay={renderTranscriptDisplay}
+                    pageContext={pageContext}
+                    isLoading={isLoading}
+                    toggleReasoning={toggleReasoning}
+                    playAudio={playAudio}
+                    regenerateAudio={regenerateSpeech}
+                  />
+                )}
+                {/* 悬浮的Todo徽章与折叠面板 */}
+                {activeTodoList && (
+                  <div className="absolute right-0 bottom-0 z-20">
+                    {/* 小徽章（面板展开时隐藏） */}
+                    {!isTodoPanelOpen && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsTodoPanelOpen((v) => {
+                            const next = !v;
+                            if (todoAutoCloseTimerRef.current) {
+                              clearTimeout(todoAutoCloseTimerRef.current);
+                              todoAutoCloseTimerRef.current = null;
+                            }
+                            return next;
+                          });
+                        }}
+                        className="absolute flex items-center gap-2 bg-white/90 backdrop-blur border border-gray-200 shadow-sm rounded-full px-3 py-1 hover:shadow-md transition"
+                        style={{ right: BADGE_POS.right, bottom: BADGE_POS.bottom }}
+                        title="查看任务清单"
+                      >
+                        <span className="text-xs font-medium text-gray-700">
+                          Todo {activeTodoList.completed_tasks}/{activeTodoList.total_tasks}
+                        </span>
+                        <div className="w-24 bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className="bg-blue-500 h-1.5 rounded-full"
+                            style={{ width: `${Math.min(100, Math.max(0, (activeTodoList.total_tasks > 0 ? (activeTodoList.completed_tasks / activeTodoList.total_tasks) * 100 : 0)))}%` }}
+                          />
+                        </div>
+                      </button>
+                    )}
+
+                    {/* 折叠面板动画容器：独立绝对定位，避免与徽章位置耦合 */}
+                    <div
+                      className={`absolute w-80 transform transition-all duration-300 ease-in-out ${
+                        isTodoPanelOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'
+                      }`}
+                      style={{ right: PANEL_POS.right, bottom: PANEL_POS.bottom, overflow: 'hidden' }}
+                    >
+                      <div className="relative">
+                        <button
+                          onClick={() => {
+                            setIsTodoPanelOpen(false);
+                            if (todoAutoCloseTimerRef.current) {
+                              clearTimeout(todoAutoCloseTimerRef.current);
+                              todoAutoCloseTimerRef.current = null;
+                            }
+                          }}
+                          className="absolute top-2 right-2 p-1 rounded hover:bg-gray-100"
+                          title="收起"
+                        >
+                          <X size={14} className="text-gray-500" />
+                        </button>
+                        <TodoDisplay todoList={activeTodoList} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <DoubaoVoiceView />
             )}

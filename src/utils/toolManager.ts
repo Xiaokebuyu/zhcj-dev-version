@@ -33,6 +33,66 @@ export interface ToolCall {
         }
       }
     },
+    // ===== TodoWrite 工具 =====
+    {
+      type: "function",
+      function: {
+        name: "create_todo_list",
+        description: "创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "任务清单标题，简明扼要地描述整个任务目标" },
+            tasks: { type: "array", items: { type: "string" }, description: "按执行顺序排列的任务步骤，每个步骤用一句话描述，用户友好语言" }
+          },
+          required: ["title", "tasks"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "complete_todo_task",
+        description: "标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
+        parameters: {
+          type: "object",
+          properties: {
+            todo_id: { type: "string", description: "任务清单ID" },
+            task_id: { type: "string", description: "已完成的任务ID" },
+            completion_note: { type: "string", description: "完成说明，简要描述完成了什么" }
+          },
+          required: ["todo_id", "task_id"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "add_todo_task",
+        description: "向现有任务清单添加新任务。当发现需要额外步骤时使用。",
+        parameters: {
+          type: "object",
+          properties: {
+            todo_id: { type: "string", description: "目标任务清单ID" },
+            task_description: { type: "string", description: "新任务的描述" }
+          },
+          required: ["todo_id", "task_description"]
+        }
+      }
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_todo_status",
+        description: "获取当前任务清单的状态和进度",
+        parameters: {
+          type: "object",
+          properties: {
+            todo_id: { type: "string", description: "任务清单ID，留空获取当前活跃的清单" }
+          }
+        }
+      }
+    },
     {
       type: "function",
       function: {
@@ -573,6 +633,19 @@ export interface ToolCall {
           let result: object;
           
           switch (toolCall.function.name) {
+            // ===== TodoWrite 执行分支 =====
+            case 'create_todo_list':
+              result = await this.createTodoList(toolCall.function.arguments);
+              break;
+            case 'complete_todo_task':
+              result = await this.completeTodoTask(toolCall.function.arguments);
+              break;
+            case 'add_todo_task':
+              result = await this.addTodoTask(toolCall.function.arguments);
+              break;
+            case 'get_todo_status':
+              result = await this.getTodoStatus(toolCall.function.arguments);
+              break;
             case 'get_weather':
               result = await this.getWeather(toolCall.function.arguments);
               break;
@@ -664,6 +737,99 @@ export interface ToolCall {
       
       console.log(`✅ 工具执行完成，成功 ${results.length} 个`);
       return results;
+    }
+
+    // ===== TodoWrite 方法实现 =====
+    private static async createTodoList(args: string): Promise<object> {
+      try {
+        const { title, tasks } = JSON.parse(args);
+        const { TodoManager } = await import('@/types/todo');
+        const todoManager = TodoManager.getInstance();
+        const todoList = todoManager.createTodoList(title, tasks);
+        console.log('🧩 create_todo_list:', { title, tasksCount: tasks?.length, todoId: todoList.id });
+        return {
+          success: true,
+          todoList,
+          message: `已创建任务清单"${title}"，包含${tasks.length}个任务`,
+          todo_update: { type: 'todo_created', todoList }
+        };
+      } catch (error) {
+        console.error('❌ create_todo_list 失败:', error);
+        return { success: false, error: `创建Todo失败: ${error}` };
+      }
+    }
+
+    private static async completeTodoTask(args: string): Promise<object> {
+      try {
+        const { todo_id, task_id, completion_note } = JSON.parse(args);
+        const { TodoManager } = await import('@/types/todo');
+        const todoManager = TodoManager.getInstance();
+        const updatedTodoList = todoManager.completeTask(todo_id, task_id, completion_note);
+        if (!updatedTodoList) {
+          return { success: false, error: '任务不存在或已完成' };
+        }
+        console.log('🧩 complete_todo_task:', { todo_id, task_id, completion_note, completed: updatedTodoList.completed_tasks, total: updatedTodoList.total_tasks });
+        const progress = {
+          completed: updatedTodoList.completed_tasks,
+          total: updatedTodoList.total_tasks,
+          percentage: (updatedTodoList.completed_tasks / updatedTodoList.total_tasks) * 100
+        };
+        return {
+          success: true,
+          todoList: updatedTodoList,
+          message: completion_note || '任务已完成',
+          progress,
+          all_completed: progress.completed === progress.total,
+          todo_update: { type: 'task_completed', todoList: updatedTodoList }
+        };
+      } catch (error) {
+        console.error('❌ complete_todo_task 失败:', error);
+        return { success: false, error: `完成任务失败: ${error}` };
+      }
+    }
+
+    private static async addTodoTask(args: string): Promise<object> {
+      try {
+        const { todo_id, task_description } = JSON.parse(args);
+        const { TodoManager } = await import('@/types/todo');
+        const todoManager = TodoManager.getInstance();
+        const updatedTodoList = todoManager.addTask(todo_id, task_description);
+        if (!updatedTodoList) {
+          return { success: false, error: 'Todo列表不存在' };
+        }
+        console.log('🧩 add_todo_task:', { todo_id, task_description, total: updatedTodoList.total_tasks });
+        return {
+          success: true,
+          todoList: updatedTodoList,
+          message: `已添加新任务: ${task_description}`,
+          todo_update: { type: 'task_added', todoList: updatedTodoList }
+        };
+      } catch (error) {
+        console.error('❌ add_todo_task 失败:', error);
+        return { success: false, error: `添加任务失败: ${error}` };
+      }
+    }
+
+    private static async getTodoStatus(args: string): Promise<object> {
+      try {
+        let todo_id: string | undefined;
+        try { todo_id = JSON.parse(args)?.todo_id; } catch {}
+        const { TodoManager } = await import('@/types/todo');
+        const todoManager = TodoManager.getInstance();
+        const todoList = todo_id ? todoManager.getTodoListById(todo_id) : todoManager.getActiveTodoList();
+        if (!todoList) {
+          return { success: false, error: '没有找到Todo列表' };
+        }
+        console.log('🧩 get_todo_status:', { todo_id: todo_id || '(active)', completed: todoList.completed_tasks, total: todoList.total_tasks, current: todoList.current_task_id });
+        return {
+          success: true,
+          todoList,
+          has_incomplete_tasks: todoManager.hasIncompleteTasks(todoList.id)
+        };
+      } catch (error) {
+        console.error('❌ get_todo_status 失败:', error);
+        return { success: false, error: `获取Todo状态失败: ${error}` };
+      }
     }
     
     // 获取天气信息的核心方法
