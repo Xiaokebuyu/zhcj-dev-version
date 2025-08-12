@@ -66,6 +66,14 @@ const ChatView: React.FC<ChatViewProps> = ({
   regenerateAudio
 }) => {
   const isGroupType = (t: string | undefined) => t === 'reasoning' || t === 'tool_execution';
+  
+  // 组内展开状态管理
+  const [expandedInGroup, setExpandedInGroup] = React.useState<string | null>(null);
+  
+  // 处理组内展开
+  const handleGroupExpand = (messageId: string) => {
+    setExpandedInGroup(prev => prev === messageId ? null : messageId);
+  };
 
   // 将相邻的 reasoning/tool_execution 消息归成轻量容器
   const buildNodes = () => {
@@ -94,6 +102,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                     onPlayAudio={playAudio}
                     onRegenerateAudio={regenerateAudio}
                     variant="grouped"
+                    isExpandedInGroup={expandedInGroup === gm.id}
+                    onGroupExpand={handleGroupExpand}
                   />
                 ))}
               </div>
@@ -234,6 +244,8 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
   // 位置可调：徽章与面板的独立偏移（像素）
   const BADGE_POS = { right: 16, bottom: 105 };
   const PANEL_POS = { right: 16, bottom: 105 }; // 建议 = BADGE_POS.bottom + 徽章高度(约32) + 间距
+  
+
 
   const openTodoPanelAuto = useCallback(() => {
     console.log('🪄 自动展开Todo面板 3秒');

@@ -16,6 +16,10 @@ interface UnifiedMessageProps {
   onRegenerateAudio?: (messageId: string, text: string) => void;
   // 展示变体：分组内的子卡片或独立消息
   variant?: 'standalone' | 'grouped';
+  // 新增：是否是组内当前展开的卡片
+  isExpandedInGroup?: boolean;
+  // 新增：组内展开控制
+  onGroupExpand?: (messageId: string) => void;
 }
 
 // 读取OpenManus后端地址（构建时注入），默认本地8001
@@ -26,7 +30,9 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   onToggleReasoning,
   onPlayAudio,
   onRegenerateAudio,
-  variant = 'standalone'
+  variant = 'standalone',
+  isExpandedInGroup = false,
+  onGroupExpand
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const finalMessageRef = useRef<HTMLDivElement>(null);
@@ -195,15 +201,21 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   const renderReasoning = () => {
     if (!message.reasoningContent) return null;
 
-    const cardMargin = variant === 'grouped' ? 'mb-2' : 'mb-4';
+    const cardMargin = variant === 'grouped' ? 'mb-0' : 'mb-4';
     const headerPadding = variant === 'grouped' ? 'p-2' : 'p-3';
     const bodyPadding = variant === 'grouped' ? 'p-3' : 'p-4';
+    
+    // 在分组模式下，只有当前展开的卡片才显示内容
+    const isCollapsed = variant === 'grouped' ? !isExpandedInGroup : message.isCollapsed;
+    const handleClick = variant === 'grouped' ? 
+      () => onGroupExpand?.(message.id) : 
+      onToggleReasoning;
 
     return (
       <div className={`${cardMargin} ${variant==='grouped' ? 'rounded-none border-0' : 'rounded-lg border border-gray-200'} bg-white overflow-hidden`}>
         <div 
-          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
-          onClick={onToggleReasoning}
+          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white hover:bg-gray-50' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
+          onClick={handleClick}
         >
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-700">思维过程</span>
@@ -221,7 +233,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
               <span className="text-xs text-gray-500">{message.reasoningDuration}s</span>
             )}
             <button className="p-1 rounded hover:bg-gray-200 transition-colors">
-              {message.isCollapsed ? (
+              {isCollapsed ? (
                 <ChevronRight className="w-4 h-4 text-gray-500" />
               ) : (
                 <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -230,7 +242,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
           </div>
         </div>
 
-        {!message.isCollapsed && (
+        {!isCollapsed && (
           <div 
             ref={contentRef}
             className={`${bodyPadding} ${variant==='grouped' ? '' : ''} max-h-64 overflow-y-auto text-sm text-gray-700 leading-relaxed whitespace-pre-wrap`}
@@ -265,15 +277,21 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
       })
       .filter(Boolean) as Array<{ taskId: string; status: string }>;
 
-    const cardMargin = variant === 'grouped' ? 'mb-2' : 'mb-4';
+    const cardMargin = variant === 'grouped' ? 'mb-0' : 'mb-4';
     const headerPadding = variant === 'grouped' ? 'p-2' : 'p-3';
     const bodyPadding = variant === 'grouped' ? 'p-3' : 'p-4';
+    
+    // 在分组模式下，只有当前展开的卡片才显示内容
+    const isCollapsed = variant === 'grouped' ? !isExpandedInGroup : message.isCollapsed;
+    const handleClick = variant === 'grouped' ? 
+      () => onGroupExpand?.(message.id) : 
+      onToggleReasoning;
 
     return (
       <div className={`${cardMargin} ${variant==='grouped' ? 'rounded-none border-0' : 'rounded-lg border border-gray-200'} bg-white overflow-hidden`}>
         <div
-          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
-          onClick={onToggleReasoning}
+          className={`flex items-center justify-between ${headerPadding} ${variant==='grouped' ? 'bg-white hover:bg-gray-50' : 'bg-gray-50 border-b border-gray-100'} cursor-pointer hover:bg-gray-50 transition-colors`}
+          onClick={handleClick}
         >
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-gray-600" />
@@ -287,7 +305,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
             </span>
           </div>
           <button className="p-1 rounded hover:bg-gray-200 transition-colors">
-            {message.isCollapsed ? (
+            {isCollapsed ? (
               <ChevronRight className="w-4 h-4 text-gray-500" />
             ) : (
               <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -295,7 +313,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
           </button>
         </div>
 
-        {!message.isCollapsed && (
+        {!isCollapsed && (
           <div className={`${bodyPadding} space-y-4`}>
             {message.toolExecution.toolCalls.map((toolCall) => (
               <div key={toolCall.id} className="mb-3 last:mb-0">
@@ -381,18 +399,18 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
             </p>
           )}
           
-          {/* 语音播放按钮 */}
-          {message.audioUrl && onPlayAudio && (
+          {/* 语音播放按钮 - 已隐藏 */}
+          {/* {message.audioUrl && onPlayAudio && (
             <button
               onClick={() => onPlayAudio(message.audioUrl!)}
               className="mt-2 p-1.5 hover:bg-gray-100 rounded transition-colors"
             >
               <Volume2 size={14} className="text-gray-400" />
             </button>
-          )}
+          )} */}
           
-          {/* 重新生成语音按钮 */}
-          {onRegenerateAudio && (
+          {/* 重新生成语音按钮 - 已隐藏 */}
+          {/* {onRegenerateAudio && (
             <button
               onClick={() => onRegenerateAudio(message.id, message.content)}
               className="mt-2 ml-1 p-1.5 hover:bg-gray-100 rounded transition-colors"
@@ -400,7 +418,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
             >
               <RefreshCw size={14} className="text-gray-400" />
             </button>
-          )}
+          )} */}
           
           {/* 搜索来源 */}
           {message.searchSources && message.searchSources.length > 0 && (
@@ -439,8 +457,8 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
       {/* 普通消息显示 */}
       {renderMessage()}
       
-      {/* 操作按钮 - 只对AI回复显示 */}
-      {(message.role === 'assistant' && message.messageType === 'assistant_final') && (
+      {/* 操作按钮 - 已隐藏 */}
+      {/* {(message.role === 'assistant' && message.messageType === 'assistant_final') && (
         <div className="flex items-center gap-1 mt-2 ml-11">
           <button className="p-1.5 hover:bg-gray-100 rounded transition-colors">
             <Copy size={14} className="text-gray-400" />
@@ -452,7 +470,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
             <ThumbsDown size={14} className="text-gray-400" />
           </button>
         </div>
-      )}
+      )} */}
     </div>
   );
 });
