@@ -247,11 +247,13 @@ const TOOL_DEFINITIONS = [
       parameters: {
         type: "object",
         properties: {
-          todo_id: { type: "string", description: "任务清单ID" },
-          task_id: { type: "string", description: "已完成的任务ID" },
-          completion_note: { type: "string", description: "完成说明，简要描述完成了什么" }
+          todo_id: { type: "string", description: "任务清单ID（留空则使用当前活跃清单）" },
+          task_id: { type: "string", description: "已完成的任务ID（推荐）。如未知可不填" },
+          completion_note: { type: "string", description: "完成说明，简要描述完成了什么" },
+          task_index: { type: "number", description: "任务在列表中的序号（从1开始）。当无法提供 task_id 时使用" },
+          task_content: { type: "string", description: "任务内容或关键字。当无法提供 task_id 时使用，系统将模糊匹配" }
         },
-        required: ["todo_id", "task_id"]
+        required: []
       }
     }
   },
@@ -304,7 +306,7 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-// 👇 新增：统一的系统提示词常量，加入 TodoWrite 原则
+// 👇 新增：统一的系统提示词常量，加入 TodoWrite 原则与防误操作规范
 const SYSTEM_PROMPT = `
 # 智慧残健平台全权AI代理
 
@@ -323,12 +325,19 @@ const SYSTEM_PROMPT = `
 2. 开始执行第一个任务
 3. 完成后立即调用complete_todo_task更新状态
 4. 继续下一个任务直到全部完成
+5. 在使用任何工具时候，向用户描述当前正在执行的操作，比如“我正在查询天气/信息，以及正在搜索/发帖/创建任务清单/更新任务清单等等”
 
 ### 任务分解原则
 - 每个任务是一个有意义的完整操作
 - 一般分解为3-6个步骤
 - 用用户友好语言描述
 - 避免技术性术语
+
+### 防误操作规范（极其重要）
+- 在调用 complete_todo_task 时，优先使用工具返回的最新 todo_id 与 task_id；不要臆造或回忆ID。
+- 如果无法准确提供 task_id，请改用 task_index（从1开始）或 task_content（关键词）。系统会兜底匹配当前清单中最可能的任务。
+- 在用户要求完成任务的时候，请先调用 get_todo_status 确认当前活跃清单与 current_task_id。
+- 在一个任务完成后，系统将自动开始下一个任务；请按顺序继续，不要跳步完成多个任务。
 
 ## 执行权限  
 - 拥有完整平台功能调用权限
@@ -674,7 +683,7 @@ export async function POST(request: NextRequest) {
                 return; // 暂停，等待任务完成
               }
 
-              // 第三阶段：将工具结果发回Kimi继续推理
+              // 第三阶段：将工具结果发回Kimi继续推理（追加Todo记忆，降低跨轮次错误率）
               await continueWithToolResults(
                 processedMessages, 
                 validToolCalls, 
@@ -689,10 +698,26 @@ export async function POST(request: NextRequest) {
                 satoken, 
                 model, 
                 temperature, 
-                max_tokens
+                max_tokens,
+                buildTodoMemoryFromToolResults(toolResults) || undefined
                 // top_p,
                 // frequency_penalty
               );
+
+              // 🧩 自动收尾：如果模型没有显式更新最后一步，但Todo仍未完成，则补一次状态更新提示
+              try {
+                const lastTodo = extractLatestTodoList(toolResults);
+                if (lastTodo && lastTodo.completed_tasks < lastTodo.total_tasks) {
+                  const remaining = (lastTodo.tasks || []).find((t: any) => t.status !== 'completed');
+                  if (remaining) {
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+                      type: 'system_instruction',
+                      content: `收尾检查：你还有未完成的任务: "${remaining.content}"。如果该步骤已完成，请立即调用 complete_todo_task 完成状态更新；如果尚未完成，请继续执行该步骤。`,
+                      messageId
+                    })}\n\n`));
+                  }
+                }
+              } catch {}
             }
           } else {
             // 没有工具调用，直接完成
@@ -810,6 +835,49 @@ function extractPendingTasks(toolResults: any[]): string[] {
   return pendingTasks;
 }
 
+// 🔧 从工具结果中提取最新的 Todo 记忆（用于后续轮次提示模型）
+function buildTodoMemoryFromToolResults(toolResults: any[]): string | null {
+  if (!Array.isArray(toolResults) || toolResults.length === 0) return null;
+  let lastTodo: any | null = null;
+  for (const r of toolResults) {
+    try {
+      const content = typeof r.content === 'string' ? JSON.parse(r.content) : r.content;
+      if (content?.todo_update?.todoList) {
+        lastTodo = content.todo_update.todoList;
+      } else if (content?.todoList) {
+        lastTodo = content.todoList;
+      }
+    } catch {}
+  }
+  if (!lastTodo) return null;
+  const currentTask = (lastTodo.tasks || []).find((t: any) => t.id === lastTodo.current_task_id);
+  const lines = [
+    '[TodoMemory]',
+    `active_todo_id: ${lastTodo.id}`,
+    `current_task_id: ${lastTodo.current_task_id || ''}`,
+    `progress: ${lastTodo.completed_tasks}/${lastTodo.total_tasks}`,
+    `current_task_content: ${currentTask?.content || ''}`
+  ];
+  return lines.join('\n');
+}
+
+// 🔧 提取最近一次包含的 TodoList 对象（供自动收尾使用）
+function extractLatestTodoList(toolResults: any[]): any | null {
+  if (!Array.isArray(toolResults)) return null;
+  let lastTodo: any | null = null;
+  for (const r of toolResults) {
+    try {
+      const content = typeof r.content === 'string' ? JSON.parse(r.content) : r.content;
+      if (content?.todo_update?.todoList) {
+        lastTodo = content.todo_update.todoList;
+      } else if (content?.todoList) {
+        lastTodo = content.todoList;
+      }
+    } catch {}
+  }
+  return lastTodo;
+}
+
 // 🔑 监控pending任务
 async function monitorPendingTasks(
   taskIds: string[], 
@@ -905,7 +973,8 @@ async function continueWithToolResults(
   satoken?: string,
   model?: string,
   temperature?: number,
-  max_tokens?: number
+  max_tokens?: number,
+  todoMemory?: string
   // top_p?: number,
   // frequency_penalty?: number
 ) {
@@ -916,6 +985,11 @@ async function continueWithToolResults(
     const baseMessages = (messages.length > 0 && messages[0].role === 'system')
       ? messages
       : [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
+
+    // 附加 TodoMemory 提示，帮助下一轮工具选择携带正确ID
+    const memoryMessages = todoMemory
+      ? [{ role: 'system', content: `${todoMemory}` }]
+      : [];
 
     // 将工具执行结果转换为 Kimi 期望的 tool 消息
     const toolMessages = (toolResults || []).map((result: any) => {
@@ -935,6 +1009,7 @@ async function continueWithToolResults(
 
     const fullMessages = sanitizeMessagesForKimi([
       ...baseMessages,
+      ...memoryMessages,
       {
         role: 'assistant',
         content: toolCalls.length > 0 ? '调用工具' : '(无工具调用)',

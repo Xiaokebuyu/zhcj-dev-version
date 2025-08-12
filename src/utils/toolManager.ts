@@ -59,7 +59,10 @@ export interface ToolCall {
           properties: {
             todo_id: { type: "string", description: "任务清单ID" },
             task_id: { type: "string", description: "已完成的任务ID" },
-            completion_note: { type: "string", description: "完成说明，简要描述完成了什么" }
+            completion_note: { type: "string", description: "完成说明，简要描述完成了什么" },
+            // 兼容增强：如果无法准确提供 task_id，可提供 task_index 或 task_content，由系统兜底匹配
+            task_index: { type: "number", description: "任务在列表中的序号（从1开始）。与 task_id 二选一" },
+            task_content: { type: "string", description: "任务内容（或其关键字），系统将进行模糊匹配。与 task_id 二选一" }
           },
           required: ["todo_id", "task_id"]
         }
@@ -761,10 +764,67 @@ export interface ToolCall {
 
     private static async completeTodoTask(args: string): Promise<object> {
       try {
-        const { todo_id, task_id, completion_note } = JSON.parse(args);
+        const { todo_id, task_id, completion_note, task_index, task_content } = JSON.parse(args);
         const { TodoManager } = await import('@/types/todo');
         const todoManager = TodoManager.getInstance();
-        const updatedTodoList = todoManager.completeTask(todo_id, task_id, completion_note);
+
+        // 获取列表（带重试，缓解偶发的异步时序问题）
+        let todoList = todoManager.getTodoListById(todo_id) || null;
+        if (!todoList) {
+          for (let i = 0; i < 2 && !todoList; i++) {
+            await new Promise(res => setTimeout(res, 120));
+            todoList = todoManager.getTodoListById(todo_id);
+          }
+        }
+        // 回退：若没传todo_id或未找到，则尝试使用活跃列表
+        if (!todoList) {
+          todoList = todoManager.getActiveTodoList();
+        }
+        if (!todoList) {
+          return { success: false, error: '未找到Todo列表，请先创建任务清单或重试' };
+        }
+
+        // 解析 task_id，不存在时尝试用 task_index 或 task_content 兜底
+        let resolvedTaskId: string | undefined = task_id;
+        let resolvedFrom: 'id' | 'index' | 'content' | 'current' | 'unknown' = 'unknown';
+
+        if (!resolvedTaskId && typeof task_index === 'number') {
+          // 兼容从1开始/0开始，优先认为从1开始
+          const idx = Math.max(0, Math.floor(task_index) - 1);
+          const target = todoList.tasks[idx];
+          if (target) {
+            resolvedTaskId = target.id;
+            resolvedFrom = 'index';
+          }
+        }
+        if (!resolvedTaskId && typeof task_content === 'string' && task_content.trim()) {
+          const keyword = task_content.trim();
+          const preferOrder = ['in_progress', 'pending', 'completed'] as const;
+          let matched: string | undefined;
+          for (const status of preferOrder) {
+            const found = todoList.tasks.find(t => t.status === status && t.content.includes(keyword));
+            if (found) { matched = found.id; break; }
+          }
+          if (matched) {
+            resolvedTaskId = matched;
+            resolvedFrom = 'content';
+          }
+        }
+        if (!resolvedTaskId && todoList.current_task_id) {
+          resolvedTaskId = todoList.current_task_id;
+          resolvedFrom = 'current';
+        }
+        if (!resolvedTaskId) {
+          return {
+            success: false,
+            error: '无法解析任务标识。请提供 task_id，或补充 task_index/task_content。',
+            hint: {
+              available_tasks: todoList.tasks.map((t, i) => ({ index: i + 1, id: t.id, status: t.status, content: t.content })).slice(0, 20)
+            }
+          };
+        }
+
+        const updatedTodoList = todoManager.completeTask(todoList.id, resolvedTaskId, completion_note);
         if (!updatedTodoList) {
           return { success: false, error: '任务不存在或已完成' };
         }
@@ -780,7 +840,8 @@ export interface ToolCall {
           message: completion_note || '任务已完成',
           progress,
           all_completed: progress.completed === progress.total,
-          todo_update: { type: 'task_completed', todoList: updatedTodoList }
+          todo_update: { type: 'task_completed', todoList: updatedTodoList },
+          resolved: { task_id: resolvedTaskId, from: resolvedFrom }
         };
       } catch (error) {
         console.error('❌ complete_todo_task 失败:', error);
