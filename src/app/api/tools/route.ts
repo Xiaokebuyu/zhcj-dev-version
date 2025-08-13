@@ -1,7 +1,7 @@
 // src/app/api/tools/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { ToolCall, ToolResult, PageContext } from '@/types';
-import { ToolExecutor } from '@/utils/toolManager';
+import { ToolExecutor, getToolDefinitions } from '@/utils/toolManager';
 
 export async function POST(request: NextRequest) {
   try {
@@ -326,7 +326,7 @@ export async function GET() {
   return NextResponse.json({ 
     status: 'ok', 
     service: 'Tools API',
-    supportedTools: ['get_weather','web_search','openmanus_web_automation','openmanus_code_execution','openmanus_file_operations','openmanus_general_task'],
+    supportedTools: getToolDefinitions().map(t => t.function.name),
     timestamp: new Date().toISOString() 
   });
 }

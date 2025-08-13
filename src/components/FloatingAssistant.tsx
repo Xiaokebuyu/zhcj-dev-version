@@ -19,7 +19,6 @@ interface SearchResult {
 
 // 已移动到统一类型定义中
 import { StreamingSpeechRecognition } from '@/utils/streamingSpeechRecognition';
-import { toolDefinitions } from '@/utils/toolManager';
 import { VoiceCallMode } from './VoiceCall/VoiceCallMode';
 import { VoiceCallManager } from '@/utils/voiceCallManager';
 import UnifiedMessage from './UnifiedMessage';

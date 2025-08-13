@@ -2,6 +2,7 @@
 // 集成了OpenManus AI代理功能的聊天API
 import { NextRequest, NextResponse } from 'next/server';
 import { ChatRequest, PageContext } from '@/types';
+import { getToolDefinitions } from '@/utils/toolManager';
 
 // 删除重复的PageContextProcessor类定义，使用下面已有的更完整版本
 
@@ -85,226 +86,8 @@ async function parseStream(
   }
 }
 
-// 工具定义
-const TOOL_DEFINITIONS = [
-  {
-    type: "function",
-    function: {
-      name: "get_weather",
-      description: "获取指定城市的天气信息",
-      parameters: {
-        type: "object",
-        properties: {
-          location: { type: "string", description: "城市名称" },
-          adm: { type: "string", description: "行政区域" }
-        },
-        required: ["location"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "公共互联网关键词搜索，获取新闻、事实性资料、公开数据等",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "搜索关键词" }
-        },
-        required: ["query"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_feedback",
-      description: "向智慧残健平台提交用户反馈",
-      parameters: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "反馈正文，≤200 字" },
-          type:    { type: "integer", description: "反馈类别：0-功能异常 1-问题投诉 2-错误报告 3-其他反馈", default: 0 },
-          name:    { type: "string", description: "反馈人姓名" },
-          phone:   { type: "string", description: "手机号(11 位)" },
-          satoken: { type: "string", description: "当前登录 token(自动注入)", nullable: true }
-        },
-        required: ["content", "name", "phone"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_post",
-      description: "在论坛发表新帖子",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "帖子标题" },
-          content: { type: "string", description: "正文，不少于10字" },
-          type: { type: "integer", description: "帖子分类：0-日常生活 1-医疗协助 2-交通出行 3-社交陪伴 4-其他", default: 0 },
-          satoken: { type: "string", description: "用户登录 token(自动注入)", nullable: true }
-        },
-        required: ["title", "content"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_request",
-      description: "发布新的求助信息（残障人士使用）",
-      parameters: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "求助内容，不少于10字" },
-          type: { type: "integer", description: "求助类别", default: 0 },
-          urgent: { type: "integer", description: "紧急程度：0-一般 1-较急 2-着急", default: 0 },
-          isOnline: { type: "integer", description: "求助方式：0-线下 1-线上", default: 1 },
-          address: { type: "string", description: "线下地址(仅 isOnline=0 时必填)", nullable: true },
-          satoken: { type: "string", description: "登录 token(自动注入)", nullable: true }
-        },
-        required: ["content", "isOnline"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_web_automation",
-      description: "浏览器自动化/网页抓取，支持登录、点击、滚动、批量抓取结构化数据等复杂交互",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          url: { type: "string", description: "目标网页URL（可选）" }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_code_execution",
-      description: "执行Python代码进行数据分析、计算、文件处理等",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          code_type: {
-            type: "string",
-            description: "代码类型：data_analysis、file_processing、calculation、visualization",
-            enum: ["data_analysis", "file_processing", "calculation", "visualization"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_file_operations",
-      description: "文件读写/编辑/格式转换等本地或远程文件操作",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          operation_type: {
-            type: "string",
-            description: "操作类型：read、write、edit、convert、delete",
-            enum: ["read", "write", "edit", "convert", "delete"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  // ===== TodoWrite 工具 =====
-  {
-    type: "function",
-    function: {
-      name: "create_todo_list",
-      description: "创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "任务清单标题，简明扼要地描述整个任务目标" },
-          tasks: { type: "array", items: { type: "string" }, description: "按执行顺序排列的任务步骤，每个步骤用一句话描述，用户友好语言" }
-        },
-        required: ["title", "tasks"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "complete_todo_task",
-      description: "标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "任务清单ID（留空则使用当前活跃清单）" },
-          task_id: { type: "string", description: "已完成的任务ID（推荐）。如未知可不填" },
-          completion_note: { type: "string", description: "完成说明，简要描述完成了什么" },
-          task_index: { type: "number", description: "任务在列表中的序号（从1开始）。当无法提供 task_id 时使用" },
-          task_content: { type: "string", description: "任务内容或关键字。当无法提供 task_id 时使用，系统将模糊匹配" }
-        },
-        required: []
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "add_todo_task",
-      description: "向现有任务清单添加新任务。当发现需要额外步骤时使用。",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "目标任务清单ID" },
-          task_description: { type: "string", description: "新任务的描述" }
-        },
-        required: ["todo_id", "task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_todo_status",
-      description: "获取当前任务清单的状态和进度",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "任务清单ID，留空获取当前活跃的清单" }
-        }
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_general_task",
-      description: "通用智能代理，适合多步骤规划或需要同时使用多种工具的复杂任务",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          complexity: {
-            type: "string", 
-            description: "任务复杂度：simple、medium、complex",
-            enum: ["simple", "medium", "complex"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
-  }
-];
+
+// 工具定义通过 getToolDefinitions 动态获取（本地 + 远程MCP）
 
 // 👇 新增：统一的系统提示词常量，加入 TodoWrite 原则与防误操作规范
 const SYSTEM_PROMPT = `
@@ -556,7 +339,7 @@ export async function POST(request: NextRequest) {
               // ...(top_p !== undefined && { top_p }),
               // ...(frequency_penalty !== undefined && { frequency_penalty }),
               stream: true,
-              tools: TOOL_DEFINITIONS,
+              tools: getToolDefinitions(),
               tool_choice: 'auto'
             })
           });
@@ -1033,7 +816,7 @@ async function continueWithToolResults(
         // ...(top_p !== undefined && { top_p }),
         // ...(frequency_penalty !== undefined && { frequency_penalty }),
         stream: true,
-        tools: TOOL_DEFINITIONS,
+        tools: getToolDefinitions(),
         tool_choice: 'auto'
       })
     });

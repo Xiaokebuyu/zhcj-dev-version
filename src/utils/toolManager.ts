@@ -1,6 +1,8 @@
 // src/utils/toolManager.ts
 // 集成了OpenManus AI代理功能的工具管理器
 
+import { mcpManager } from './mcpConnector';
+
 export interface ToolCall {
     id: string;
     type: 'function';
@@ -16,8 +18,8 @@ export interface ToolCall {
     content: string;
   }
   
-  // 优化后的工具定义
-  export const toolDefinitions = [
+  // 优化后的工具定义（本地）
+  export const localToolDefinitions = [
     {
       type: "function",
       function: {
@@ -312,7 +314,12 @@ export interface ToolCall {
       }
     }
   ];
-  
+
+  // 获取工具定义（本地 + 远程MCP）
+  export function getToolDefinitions() {
+    return [...localToolDefinitions, ...mcpManager.listTools()];
+  }
+
   // 天气API响应类型定义
   interface GeoLocation {
     name: string;
@@ -634,8 +641,11 @@ export interface ToolCall {
       for (const toolCall of toolCalls) {
         try {
           let result: object;
-          
-          switch (toolCall.function.name) {
+          if (mcpManager.hasTool(toolCall.function.name)) {
+            const args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+            result = await mcpManager.callTool(toolCall.function.name, args);
+          } else {
+            switch (toolCall.function.name) {
             // ===== TodoWrite 执行分支 =====
             case 'create_todo_list':
               result = await this.createTodoList(toolCall.function.arguments);
@@ -716,6 +726,7 @@ export interface ToolCall {
               break;
             default:
               throw new Error(`未知工具: ${toolCall.function.name}`);
+            }
           }
           
           results.push({
