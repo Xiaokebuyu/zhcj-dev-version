@@ -19,6 +19,7 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
     "lru-cache": "^11.1.0",
+    "mcp": "^1.5.0",
     "lucide-react": "^0.469.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
     "next": "^15.3.3",
