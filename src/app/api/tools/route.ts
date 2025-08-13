@@ -1,10 +1,29 @@
 // src/app/api/tools/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { ToolCall, ToolResult, PageContext } from '@/types';
-import { ExtendedToolExecutor } from '@/utils/toolManagerExtended';
+import { ToolRouter } from '@/utils/toolRouter';
+
+// 全局初始化标志
+let isRouterInitialized = false;
+
+async function ensureRouterInitialized() {
+  if (!isRouterInitialized) {
+    try {
+      await ToolRouter.initialize();
+      isRouterInitialized = true;
+      console.log('✅ 工具路由器初始化完成');
+    } catch (error) {
+      console.error('❌ 工具路由器初始化失败:', error);
+      throw error;
+    }
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
+    // 确保路由器已初始化
+    await ensureRouterInitialized();
+
     const { tool_calls, pageContext }: { tool_calls: ToolCall[], pageContext?: PageContext } = await request.json();
 
     if (!tool_calls || !Array.isArray(tool_calls) || tool_calls.length === 0) {
@@ -14,9 +33,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ✅ 关键修复：从浏览器请求中提取认证信息
+    // 提取认证信息（保持原有逻辑）
     const extractAuthFromRequest = (req: NextRequest): string | null => {
-      // 方法1：从Cookie Header中提取
       const cookieHeader = req.headers.get('cookie');
       if (cookieHeader) {
         const cookies = cookieHeader.split('; ').reduce((acc, cookie) => {
@@ -25,42 +43,27 @@ export async function POST(request: NextRequest) {
           return acc;
         }, {} as Record<string, string>);
         
-        // 优先使用ada_token
-        if (cookies.ada_token) {
-          console.log('🔑 从请求Cookie中提取ada_token成功');
-          return cookies.ada_token;
-        }
-        
-        // 回退到satoken
-        if (cookies.satoken) {
-          console.log('🔑 从请求Cookie中提取satoken成功');
-          return cookies.satoken;
-        }
+        if (cookies.ada_token) return cookies.ada_token;
+        if (cookies.satoken) return cookies.satoken;
       }
       
-      // 方法2：从Authorization头中提取
       const authHeader = req.headers.get('authorization');
       if (authHeader) {
-        console.log('🔑 从Authorization头中提取认证信息');
         return authHeader.replace('Bearer ', '');
       }
       
       return null;
     };
 
-    // ✅ 提取服务端认证信息
     const serverAuthToken = extractAuthFromRequest(request);
     
-    // ✅ 创建增强的pageContext，包含服务端认证信息
     const enhancedPageContext: PageContext | undefined = pageContext ? {
       ...pageContext,
       auth: {
         satoken: serverAuthToken || pageContext?.auth?.satoken
       }
     } : serverAuthToken ? {
-      auth: {
-        satoken: serverAuthToken
-      },
+      auth: { satoken: serverAuthToken },
       basic: {
         title: 'Unknown',
         url: request.headers.get('referer') || 'Unknown',
@@ -68,14 +71,8 @@ export async function POST(request: NextRequest) {
       }
     } : undefined;
 
-    console.log('🔍 API路由认证信息:', {
-      hasServerToken: !!serverAuthToken,
-      hasClientToken: !!pageContext?.auth?.satoken,
-      tokenSource: serverAuthToken ? 'server_request' : 'client_pageContext'
-    });
-
-    // ✅ 使用增强的pageContext调用扩展工具执行器（包含MCP支持）
-    const results: ToolResult[] = await ExtendedToolExecutor.executeTools(tool_calls, enhancedPageContext);
+    // 使用新的工具路由器
+    const results: ToolResult[] = await ToolRouter.executeTools(tool_calls, enhancedPageContext);
 
     return NextResponse.json({
       results,
@@ -86,9 +83,29 @@ export async function POST(request: NextRequest) {
     console.error('工具API错误:', error);
     return NextResponse.json(
       { 
-        error: error instanceof Error ? error.message : '服务器内部错误',
-        success: false 
+        error: error instanceof Error ? error.message : '服务器内部错误' 
       },
+      { status: 500 }
+    );
+  }
+}
+
+// 获取所有工具定义的API
+export async function GET() {
+  try {
+    await ensureRouterInitialized();
+    const toolDefinitions = ToolRouter.getAllToolDefinitions();
+    const systemStatus = ToolRouter.getSystemStatus();
+    
+    return NextResponse.json({
+      success: true,
+      tools: toolDefinitions,
+      status: systemStatus
+    });
+  } catch (error) {
+    console.error('获取工具定义失败:', error);
+    return NextResponse.json(
+      { error: '获取工具定义失败' },
       { status: 500 }
     );
   }
@@ -318,15 +335,5 @@ export async function OPTIONS() {
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     },
-  });
-}
-
-// 健康检查
-export async function GET() {
-  return NextResponse.json({ 
-    status: 'ok', 
-    service: 'Tools API',
-    supportedTools: ['get_weather','web_search','openmanus_web_automation','openmanus_code_execution','openmanus_file_operations','openmanus_general_task'],
-    timestamp: new Date().toISOString() 
   });
 }

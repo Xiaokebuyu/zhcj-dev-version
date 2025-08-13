@@ -19,12 +19,14 @@ export interface MCPCallResult {
 
 export interface MCPServerStatus {
   name: string;
-  status: 'connected' | 'disconnected' | 'connecting' | 'error';
-  toolCount: number;
-  lastConnected?: Date;
-  error?: string;
-  category: string;
-  transport?: 'http-stream' | 'sse' | 'websocket'; // 传输协议类型
+  connected: boolean;
+  info: {
+    name: string;
+    url: string;
+    transport: string;
+    isConnected: boolean;
+    capabilities?: any;
+  };
 }
 
 export interface MCPConnectionState {
@@ -33,7 +35,7 @@ export interface MCPConnectionState {
   isInitialized: boolean;
 }
 
-// JSON-RPC 2.0 请求格式
+// JSON-RPC 2.0 标准格式
 export interface MCPJsonRpcRequest {
   jsonrpc: '2.0';
   id: number | string;
@@ -41,7 +43,6 @@ export interface MCPJsonRpcRequest {
   params?: Record<string, any>;
 }
 
-// JSON-RPC 2.0 响应格式
 export interface MCPJsonRpcResponse {
   jsonrpc: '2.0';
   id: number | string;
@@ -53,9 +54,17 @@ export interface MCPJsonRpcResponse {
   };
 }
 
-// MCP服务器健康状态
-export interface MCPServerHealth {
-  healthy: boolean;
-  lastCheck: Date;
-  error?: string;
+export interface MCPInitializeParams {
+  protocolVersion: string;
+  capabilities: {
+    tools?: { listChanged?: boolean };
+    sampling?: {};
+    prompts?: { listChanged?: boolean };
+    resources?: { subscribe?: boolean; listChanged?: boolean };
+  };
+  clientInfo: {
+    name: string;
+    version: string;
+  };
 }
+
