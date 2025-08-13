@@ -485,6 +485,41 @@ export interface DoubaoWebSocketMessage {
 // 导出 TodoWrite 类型
 export * from './todo';
 
+// MCP相关类型
+export interface MCPTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    properties: Record<string, any>;
+    required?: string[];
+  };
+}
+
+export interface MCPCallResult {
+  success: boolean;
+  content?: any;
+  error?: string;
+  toolName: string;
+  serverName: string;
+  executionTime?: number;
+}
+
+export interface MCPServerStatus {
+  name: string;
+  status: 'connected' | 'disconnected' | 'connecting' | 'error';
+  toolCount: number;
+  lastConnected?: Date;
+  error?: string;
+  category: string;
+}
+
+export interface MCPConnectionState {
+  servers: Record<string, MCPServerStatus>;
+  totalTools: number;
+  isInitialized: boolean;
+}
+
 // 新的统一消息类型 - 替换现有的ChatMessage
 export interface ReasoningChatMessage extends ChatMessage {
   // 消息类型：user | reasoning | tool_execution | assistant_final | assistant  

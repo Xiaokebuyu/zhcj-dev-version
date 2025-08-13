@@ -1,7 +1,7 @@
 // src/app/api/tools/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { ToolCall, ToolResult, PageContext } from '@/types';
-import { ToolExecutor } from '@/utils/toolManager';
+import { ExtendedToolExecutor } from '@/utils/toolManagerExtended';
 
 export async function POST(request: NextRequest) {
   try {
@@ -74,8 +74,8 @@ export async function POST(request: NextRequest) {
       tokenSource: serverAuthToken ? 'server_request' : 'client_pageContext'
     });
 
-    // ✅ 使用增强的pageContext调用工具执行器
-    const results: ToolResult[] = await ToolExecutor.executeTools(tool_calls, enhancedPageContext);
+    // ✅ 使用增强的pageContext调用扩展工具执行器（包含MCP支持）
+    const results: ToolResult[] = await ExtendedToolExecutor.executeTools(tool_calls, enhancedPageContext);
 
     return NextResponse.json({
       results,

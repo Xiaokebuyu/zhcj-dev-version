@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { MCPInitializer } from "@/components/MCPInitializer";
 
 export const metadata: Metadata = {
   title: "AI 悬浮框助手",
@@ -14,6 +15,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className="antialiased">
+        <MCPInitializer />
         {children}
       </body>
     </html>

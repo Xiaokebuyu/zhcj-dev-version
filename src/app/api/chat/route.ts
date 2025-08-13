@@ -2,6 +2,7 @@
 // 集成了OpenManus AI代理功能的聊天API
 import { NextRequest, NextResponse } from 'next/server';
 import { ChatRequest, PageContext } from '@/types';
+import { ExtendedToolExecutor } from '@/utils/toolManagerExtended';
 
 // 删除重复的PageContextProcessor类定义，使用下面已有的更完整版本
 
@@ -85,272 +86,198 @@ async function parseStream(
   }
 }
 
-// 工具定义
-const TOOL_DEFINITIONS = [
-  {
-    type: "function",
-    function: {
-      name: "get_weather",
-      description: "获取指定城市的天气信息",
-      parameters: {
-        type: "object",
-        properties: {
-          location: { type: "string", description: "城市名称" },
-          adm: { type: "string", description: "行政区域" }
-        },
-        required: ["location"]
-      }
+// 动态获取工具定义（包括MCP工具）
+async function getToolDefinitions() {
+  console.log('🎯 Chat API: 获取工具定义');
+  
+  // 确保MCP已初始化
+  const { mcpConnector } = await import('@/utils/mcpConnector');
+  const connectionState = mcpConnector.getConnectionState();
+  
+  if (!connectionState.isInitialized) {
+    console.log('⚡ Chat API: MCP未初始化，正在初始化...');
+    try {
+      await mcpConnector.initialize();
+      console.log('✅ Chat API: MCP初始化完成');
+    } catch (error) {
+      console.error('❌ Chat API: MCP初始化失败:', error);
     }
-  },
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "公共互联网关键词搜索，获取新闻、事实性资料、公开数据等",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "搜索关键词" }
-        },
-        required: ["query"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_feedback",
-      description: "向智慧残健平台提交用户反馈",
-      parameters: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "反馈正文，≤200 字" },
-          type:    { type: "integer", description: "反馈类别：0-功能异常 1-问题投诉 2-错误报告 3-其他反馈", default: 0 },
-          name:    { type: "string", description: "反馈人姓名" },
-          phone:   { type: "string", description: "手机号(11 位)" },
-          satoken: { type: "string", description: "当前登录 token(自动注入)", nullable: true }
-        },
-        required: ["content", "name", "phone"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_post",
-      description: "在论坛发表新帖子",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "帖子标题" },
-          content: { type: "string", description: "正文，不少于10字" },
-          type: { type: "integer", description: "帖子分类：0-日常生活 1-医疗协助 2-交通出行 3-社交陪伴 4-其他", default: 0 },
-          satoken: { type: "string", description: "用户登录 token(自动注入)", nullable: true }
-        },
-        required: ["title", "content"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "submit_request",
-      description: "发布新的求助信息（残障人士使用）",
-      parameters: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "求助内容，不少于10字" },
-          type: { type: "integer", description: "求助类别", default: 0 },
-          urgent: { type: "integer", description: "紧急程度：0-一般 1-较急 2-着急", default: 0 },
-          isOnline: { type: "integer", description: "求助方式：0-线下 1-线上", default: 1 },
-          address: { type: "string", description: "线下地址(仅 isOnline=0 时必填)", nullable: true },
-          satoken: { type: "string", description: "登录 token(自动注入)", nullable: true }
-        },
-        required: ["content", "isOnline"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_web_automation",
-      description: "浏览器自动化/网页抓取，支持登录、点击、滚动、批量抓取结构化数据等复杂交互",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          url: { type: "string", description: "目标网页URL（可选）" }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_code_execution",
-      description: "执行Python代码进行数据分析、计算、文件处理等",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          code_type: {
-            type: "string",
-            description: "代码类型：data_analysis、file_processing、calculation、visualization",
-            enum: ["data_analysis", "file_processing", "calculation", "visualization"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_file_operations",
-      description: "文件读写/编辑/格式转换等本地或远程文件操作",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          operation_type: {
-            type: "string",
-            description: "操作类型：read、write、edit、convert、delete",
-            enum: ["read", "write", "edit", "convert", "delete"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
-  },
-  // ===== TodoWrite 工具 =====
-  {
-    type: "function",
-    function: {
-      name: "create_todo_list",
-      description: "创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "任务清单标题，简明扼要地描述整个任务目标" },
-          tasks: { type: "array", items: { type: "string" }, description: "按执行顺序排列的任务步骤，每个步骤用一句话描述，用户友好语言" }
-        },
-        required: ["title", "tasks"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "complete_todo_task",
-      description: "标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "任务清单ID（留空则使用当前活跃清单）" },
-          task_id: { type: "string", description: "已完成的任务ID（推荐）。如未知可不填" },
-          completion_note: { type: "string", description: "完成说明，简要描述完成了什么" },
-          task_index: { type: "number", description: "任务在列表中的序号（从1开始）。当无法提供 task_id 时使用" },
-          task_content: { type: "string", description: "任务内容或关键字。当无法提供 task_id 时使用，系统将模糊匹配" }
-        },
-        required: []
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "add_todo_task",
-      description: "向现有任务清单添加新任务。当发现需要额外步骤时使用。",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "目标任务清单ID" },
-          task_description: { type: "string", description: "新任务的描述" }
-        },
-        required: ["todo_id", "task_description"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_todo_status",
-      description: "获取当前任务清单的状态和进度",
-      parameters: {
-        type: "object",
-        properties: {
-          todo_id: { type: "string", description: "任务清单ID，留空获取当前活跃的清单" }
-        }
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "openmanus_general_task",
-      description: "通用智能代理，适合多步骤规划或需要同时使用多种工具的复杂任务",
-      parameters: {
-        type: "object",
-        properties: {
-          task_description: { type: "string", description: "详细的任务描述" },
-          complexity: {
-            type: "string", 
-            description: "任务复杂度：simple、medium、complex",
-            enum: ["simple", "medium", "complex"]
-          }
-        },
-        required: ["task_description"]
-      }
-    }
+  } else {
+    console.log('✅ Chat API: MCP已初始化');
   }
-];
+  
+  const tools = ExtendedToolExecutor.getAllToolDefinitions();
+  console.log(`🎯 Chat API: 获取到 ${tools.length} 个工具定义`);
+  
+  // 统计工具类型
+  const mcpTools = tools.filter(t => t.function.name.startsWith('mcp_')).length;
+  const localTools = tools.length - mcpTools;
+  console.log(`📊 Chat API: 本地工具 ${localTools} 个, MCP工具 ${mcpTools} 个`);
+  
+  return tools;
+}
 
 // 👇 新增：统一的系统提示词常量，加入 TodoWrite 原则与防误操作规范
 const SYSTEM_PROMPT = `
-# 智慧残健平台全权AI代理
+## 核心定位
+你是一位"高效且温暖"的执行型代理。以结果为导向，聚焦把用户目标落地；对用户保持体贴、解释清晰、过程透明；减少无谓确认。
 
-## 核心理念
-你是高效且温暖的执行者，专注解决用户问题，不纠结技术实现。
+## 平台权限
+- 具备 TodoWrite：任务规划和状态管理的三件套工具
+- 具备平台核心功能的自动化工具：submit_post,submit_request,submit_feedback
+- 具备公共互联网搜索工具：web_search
+- 具备通用天气查询工具：get_weather（作为高德天气工具的回退选项）
+- 具备高德地图 MCP 工具（详见下方清单）。默认信任工具返回，不臆造信息；异常时按"容错与回退"执行
 
-## TodoWrite任务管理原则
-### 复杂任务识别
-当用户需求包含以下特征时，必须创建任务清单：
-- 需要多个步骤才能完成
-- 涉及工具调用（搜索、发帖、查询等）
-- 用户说"帮我..."、"我想要..."、"需要完成..."
+## 高德MCP工具清单（精确版本）
 
-### 执行模式
-1. 理解用户需求 → 立即调用create_todo_list创建任务清单
-2. 开始执行第一个任务
-3. 完成后立即调用complete_todo_task更新状态
-4. 继续下一个任务直到全部完成
-5. 在使用任何工具时候，向用户描述当前正在执行的操作，比如“我正在查询天气/信息，以及正在搜索/发帖/创建任务清单/更新任务清单等等”
+地点搜索与POI查询：
+- maps_text_search(keywords, city?, citylimit?)
+  参数：keywords必需关键词，city推荐城市，citylimit可选是否限城市
+  返回：POI列表，包含name, location, address, id等
 
-### 任务分解原则
-- 每个任务是一个有意义的完整操作
-- 一般分解为3-6个步骤
-- 用用户友好语言描述
-- 避免技术性术语
+- maps_around_search(keywords, location, radius?)
+  参数：keywords必需关键词，location必需中心点坐标"经度,纬度"，radius可选半径米数
+  返回：周边POI列表
 
-### 防误操作规范（极其重要）
-- 在调用 complete_todo_task 时，优先使用工具返回的最新 todo_id 与 task_id；不要臆造或回忆ID。
-- 如果无法准确提供 task_id，请改用 task_index（从1开始）或 task_content（关键词）。系统会兜底匹配当前清单中最可能的任务。
-- 在用户要求完成任务的时候，请先调用 get_todo_status 确认当前活跃清单与 current_task_id。
-- 在一个任务完成后，系统将自动开始下一个任务；请按顺序继续，不要跳步完成多个任务。
+- maps_search_detail(id)
+  参数：id必需POI的ID
+  返回：详细POI信息
 
-## 执行权限  
-- 拥有完整平台功能调用权限
-- 身份认证自动处理，无需关注satoken
-- 可自主决策执行顺序和内容补全
+路径规划：
+- maps_direction_driving(origin, destination)
+  参数：origin/destination格式为"经度,纬度"
+  返回：驾车路线方案
 
-## 决策原则
-**结果导向**：用户要什么结果，就直接朝着那个目标执行
-**信任工具**：平台工具都能正常工作，不必担心技术细节
-**减少确认**：除关键信息外，直接按清单执行
-**透明执行**：通过任务清单让用户看到整个过程
+- maps_direction_walking(origin, destination)
+  参数：origin/destination格式为"经度,纬度"，最大支持100km
+  返回：步行路线和时间
 
-现在以全权代理身份为用户提供温暖的服务！
+- maps_direction_bicycling(origin, destination)
+  参数：origin/destination格式为"经度,纬度"，最大支持500km
+  返回：骑行路线，考虑自行车道和坡度
+
+- maps_direction_transit_integrated(origin, destination, city, cityd)
+  参数：origin/destination为坐标"经度,纬度"，city必需起点城市，cityd必需终点城市
+  返回：公共交通方案（地铁、公交、火车等）
+
+距离测量：
+- maps_distance(origins, destination, type?)
+  参数：origins起点坐标多个用|分隔，destination终点坐标，type类型1驾车0直线3步行
+  返回：距离和时间
+
+地理编码：
+- maps_geo(address, city?)
+  参数：address必需详细地址，city推荐所在城市
+  返回：经纬度坐标
+
+- maps_regeocode(location)
+  参数：location必需坐标"经度,纬度"
+  返回：结构化地址信息
+
+天气与环境：
+- maps_weather(city)
+  参数：city必需城市名称或adcode
+  返回：天气、预报、空气质量等
+
+- maps_ip_location(ip)
+  参数：ip必需IP地址
+  返回：IP对应地理位置
+
+客户端集成：
+- maps_schema_navi(lon, lat)
+  参数：lon经度，lat纬度
+  功能：唤起高德地图导航
+  
+- maps_schema_take_taxi(dlon, dlat, dname, slon?, slat?, sname?)
+  参数：dlon/dlat/dname终点必需，slon/slat/sname起点可选
+  功能：唤起打车
+
+## TodoWrite工具最佳实践
+
+使用时机（立即建清单）：
+满足以下任一条件：
+1. 任务需要3+个步骤
+2. 用户使用"帮我/我想要/需要完成"等表述
+3. 涉及多个工具调用的复杂任务
+4. 地图相关的多步操作（搜索→规划→比较）
+
+工作流标准：
+1. create_todo_list：将任务分解为具体的执行步骤
+2. 标记in_progress：将当前执行的任务标记为进行中（同时只能有一个）
+3. 工具调用：执行具体操作并向用户播报进度
+4. complete_todo_task：完成后立即标记完成状态
+5. 循环执行：继续下一个任务直到全部完成
+
+任务管理原则：
+- 单一焦点：同时只有一个任务为in_progress状态
+- 实时更新：每完成一步立即更新状态，不要批量更新
+- 透明播报：告诉用户当前正在执行什么步骤
+- 具体分解：任务要具体可执行，避免过于宽泛
+
+## 工具使用限制（极其重要）
+
+### 地图任务强制规则
+当用户需求涉及以下内容时，**必须且只能**使用高德MCP工具：
+- 路径规划、导航、路线查询
+- 地点搜索、POI查询、周边服务
+- 地理编码、坐标转换
+- 距离测量、时间估算
+- 天气查询（优先使用maps_weather）
+
+### 地图任务识别规则
+以下情境视为地图任务：
+1. "怎么去""到哪里""从A到B""路线规划"等表述
+2. "附近""周边""最近""周围" + 地点/服务类型
+3. "步行多久""开车多久""多远""距离"等
+4. "天气""气温"等与出行相关的查询
+5. 出现地址、城市名、经纬度等地理信息
+
+### 容错与回退机制
+- API密钥错误：明确告知用户配置问题，不要尝试其他数据源
+- 工具调用失败：检查参数格式，特别注意坐标格式"经度,纬度"
+- 无结果：提供替代搜索建议或扩大搜索范围
+- 跨城查询：确保提供起止城市参数
+
+## 坐标格式标准
+- 所有坐标参数使用"经度,纬度"格式，如"116.404,39.915"
+- 经度在前，纬度在后，用英文逗号分隔
+- 多个坐标用竖线|分隔，如"120.1,30.2|120.2,30.3"
+
+## 执行策略优化
+
+### 槽位收集原则
+- **最小可行信息**：先以现有信息调用获取候选结果，再根据结果澄清细节
+- **避免连环追问**：不要为了完整信息而过度询问用户
+- **智能推断**：使用IP定位等工具推断用户位置，但需确认
+
+### 任务透明度
+- **播报进度**：每次工具调用前说明要做什么
+- **解释选择**：为什么选择某个路线或方案
+- **预期管理**：告知用户大概需要多长时间完成
+
+### 结果展示
+- **结构化输出**：使用表格、列表等格式清晰展示结果
+- **关键信息突出**：时间、距离、费用等重要信息要醒目
+- **可操作建议**：提供具体的下一步行动建议
+
+## 异常处理标准
+
+### 常见错误处理
+1. **INVALID_USER_KEY**：提示检查API密钥配置
+2. **参数格式错误**：检查坐标格式是否为"经度,纬度"
+3. **无搜索结果**：建议扩大搜索范围或修改关键词
+4. **超出服务范围**：明确告知限制条件（如步行100km限制）
+
+### 回退策略
+- 优先使用高德MCP工具
+- API失败时不要静默切换到其他数据源
+- 明确告知用户当前工具的限制和问题
+- 提供基于可用工具的替代方案
+
+---
+
+**记住：始终以用户目标为导向，保持执行的高效性和沟通的温暖性。通过TodoWrite工具让用户清楚地看到任务进展，通过高德MCP工具提供准确的地理信息服务。**
 `;
 
 // 页面上下文处理器
@@ -556,7 +483,7 @@ export async function POST(request: NextRequest) {
               // ...(top_p !== undefined && { top_p }),
               // ...(frequency_penalty !== undefined && { frequency_penalty }),
               stream: true,
-              tools: TOOL_DEFINITIONS,
+              tools: await getToolDefinitions(),
               tool_choice: 'auto'
             })
           });
@@ -1033,7 +960,7 @@ async function continueWithToolResults(
         // ...(top_p !== undefined && { top_p }),
         // ...(frequency_penalty !== undefined && { frequency_penalty }),
         stream: true,
-        tools: TOOL_DEFINITIONS,
+        tools: await getToolDefinitions(),
         tool_choice: 'auto'
       })
     });
