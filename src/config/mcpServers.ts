@@ -1,50 +1,66 @@
 export interface MCPServerConfig {
   name: string;
   url: string;
-  transport: 'sse' | 'http-stream' | 'websocket';
+  transport: 'websocket' | 'stdio' | 'http-stream' | 'sse'; // WebSocket为首选标准传输
   description: string;
   enabled: boolean;
   connectionStrategy: 'startup' | 'onDemand';
   retryAttempts?: number;
   retryDelay?: number;
   category: string;
+  connectionConfig?: {
+    heartbeatInterval?: number;
+    reconnectAttempts?: number;
+    reconnectDelay?: number;
+    connectionTimeout?: number;
+  };
 }
 
 export const MCP_SERVERS: MCPServerConfig[] = [
   {
-    name: '高德地图',
-    // ✅ 你的修正：使用/mcp端点，支持JSON-RPC over HTTP
-    url: `http://mcp.amap.com/mcp?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
-    transport: 'http-stream', // ✅ 你的修正：http-stream协议
-    description: '高德地图官方MCP服务，支持12大核心地图服务接口',
-    enabled: true,
-    connectionStrategy: 'startup',
-    retryAttempts: 3,
-    retryDelay: 5000,
-    category: '地图导航'
-  },
-  {
-    name: '高德地图-SSE',
-    // ✅ SSE端点作为备用，默认禁用
-    url: `http://mcp.amap.com/sse?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
-    transport: 'sse',
-    description: '高德地图SSE端点（需要GET请求，暂不支持）',
-    enabled: false, // 禁用，因为需要不同的连接方式
+    name: '高德地图-WebSocket',
+    url: `ws://mcp.amap.com/mcp?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
+    transport: 'websocket', // 标准WebSocket传输
+    description: '高德地图官方MCP服务WebSocket连接（备用）',
+    enabled: false, // 暂时禁用，因为返回405错误
     connectionStrategy: 'onDemand',
     retryAttempts: 2,
+    retryDelay: 5000,
+    category: '地图导航',
+    connectionConfig: {
+      heartbeatInterval: 30000,
+      reconnectAttempts: 3,
+      reconnectDelay: 3000,
+      connectionTimeout: 15000
+    }
+  },
+  {
+    name: '高德地图',
+    url: `http://mcp.amap.com/mcp?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
+    transport: 'http-stream',
+    description: '高德地图官方MCP服务，支持12大核心地图服务接口',
+    enabled: true, // 启用HTTP流传输作为主要连接方式
+    connectionStrategy: 'startup',
+    retryAttempts: 3,
     retryDelay: 3000,
     category: '地图导航'
   },
   {
     name: '和风天气',
     url: `https://api.qweather.com/mcp?key=${process.env.NEXT_PUBLIC_QWEATHER_API_KEY || 'your_qweather_api_key'}`,
-    transport: 'http-stream',
+    transport: 'websocket',
     description: '提供天气查询、预报、气象数据服务',
     enabled: false, // 暂时禁用，等确认服务可用
     connectionStrategy: 'startup',
     retryAttempts: 3,
     retryDelay: 5000,
-    category: '天气信息'
+    category: '天气信息',
+    connectionConfig: {
+      heartbeatInterval: 45000,
+      reconnectAttempts: 3,
+      reconnectDelay: 5000,
+      connectionTimeout: 20000
+    }
   }
 ];
 

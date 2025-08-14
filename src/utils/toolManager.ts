@@ -406,7 +406,7 @@ export interface ToolCall {
     
     // ✅ 统一认证处理方法
     private static injectAuthToken(toolArgs: any, pageContext?: import('@/types').PageContext): any {
-      let authToken = pageContext?.auth?.satoken;
+      const authToken = pageContext?.auth?.satoken;
       
       if (!authToken) {
         console.error('❌ 认证失败：未找到satoken');

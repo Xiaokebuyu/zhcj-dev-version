@@ -1,6 +1,6 @@
 import { ToolCall, ToolResult, PageContext } from '@/types';
 import { ToolExecutor } from './toolManager'; // 保持原有的本地工具执行器
-import { MCPToolExecutor } from './mcpToolExecutor';
+import { EnhancedMCPToolExecutor } from './enhancedMCPToolExecutor';
 import { UnifiedToolManager } from './unifiedToolManager';
 
 export interface ToolMetadata {
@@ -10,14 +10,14 @@ export interface ToolMetadata {
 }
 
 export class ToolRouter {
-  private static mcpExecutor: MCPToolExecutor;
+  private static mcpExecutor: EnhancedMCPToolExecutor;
   private static toolManager: UnifiedToolManager;
 
   static async initialize(): Promise<void> {
     console.log('🚀 初始化工具路由器...');
     
-    // 初始化MCP执行器
-    this.mcpExecutor = new MCPToolExecutor();
+    // 初始化增强MCP执行器
+    this.mcpExecutor = new EnhancedMCPToolExecutor();
     await this.mcpExecutor.initialize();
     
     // 初始化统一工具管理器
@@ -128,10 +128,54 @@ export class ToolRouter {
    * 获取系统状态
    */
   static getSystemStatus() {
+    const mcpStatus = this.mcpExecutor?.getStatus() || { available: false };
     return {
       local: { available: true, type: 'ToolExecutor' },
-      mcp: this.mcpExecutor?.getStatus() || { available: false },
+      mcp: {
+        available: mcpStatus.initialized || false,
+        ...mcpStatus
+      },
       router: { initialized: !!this.toolManager }
     };
+  }
+
+  /**
+   * 执行健康检查
+   */
+  static async healthCheck() {
+    const results = {
+      local: { healthy: true, type: 'ToolExecutor' },
+      mcp: { healthy: false, details: [] as any[] },
+      router: { healthy: !!this.toolManager }
+    };
+
+    if (this.mcpExecutor) {
+      try {
+        const healthCheck = await this.mcpExecutor.healthCheck();
+        results.mcp = healthCheck;
+      } catch (error) {
+        results.mcp = {
+          healthy: false,
+          details: [{
+            error: error instanceof Error ? error.message : '健康检查失败'
+          }]
+        };
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * 关闭工具路由器
+   */
+  static async shutdown(): Promise<void> {
+    console.log('🔌 关闭工具路由器...');
+    
+    if (this.mcpExecutor) {
+      await this.mcpExecutor.shutdown();
+    }
+    
+    console.log('✅ 工具路由器已关闭');
   }
 }

@@ -228,7 +228,7 @@ export class AudioProcessor {
     const int16Array = new Int16Array(float32Array.length);
     for (let i = 0; i < float32Array.length; i++) {
       // 限制到[-1, 1]范围
-      let sample = Math.max(-1, Math.min(1, float32Array[i]));
+      const sample = Math.max(-1, Math.min(1, float32Array[i]));
       
       // 转换为16位整数，使用正确的范围
       if (sample < 0) {

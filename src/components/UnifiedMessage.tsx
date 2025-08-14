@@ -25,7 +25,7 @@ interface UnifiedMessageProps {
 // 读取OpenManus后端地址（构建时注入），默认本地8001
 const OPENMANUS_BASE_URL = process.env.NEXT_PUBLIC_OPENMANUS_API_URL || 'http://127.0.0.1:8001';
 
-const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
+const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(function UnifiedMessage({
   message,
   onToggleReasoning,
   onPlayAudio,
@@ -33,7 +33,7 @@ const UnifiedMessage: React.FC<UnifiedMessageProps> = memo(({
   variant = 'standalone',
   isExpandedInGroup = false,
   onGroupExpand
-}) => {
+}: UnifiedMessageProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const finalMessageRef = useRef<HTMLDivElement>(null);
 

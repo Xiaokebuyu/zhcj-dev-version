@@ -46,7 +46,6 @@ export interface UnifiedChatResponse {
   todo_update?: {
     type: 'todo_created' | 'task_completed' | 'task_added';
     // 使用 any 以避免循环依赖；实际类型为 TodoList
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     todoList: any;
   };
 }
@@ -236,7 +235,6 @@ export interface EmbedOptions {
 // 消息事件类型
 export interface MessageEvent {
   type: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
   origin?: string;
 }
@@ -269,9 +267,7 @@ export interface AssistantState {
 // 全局窗口扩展（用于嵌入式SDK）
 declare global {
   interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     AIAssistant?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     initAIAssistant?: (options: EmbedOptions) => any;
   }
 }
@@ -310,13 +306,9 @@ export interface StreamingSTTEvent {
 // Web Speech API类型扩展
 declare global {
   interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     SpeechRecognition?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     webkitSpeechRecognition?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     AIAssistant?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     initAIAssistant?: (options: EmbedOptions) => any;
   }
 }

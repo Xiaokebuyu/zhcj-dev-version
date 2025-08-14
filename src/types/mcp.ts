@@ -61,10 +61,39 @@ export interface MCPInitializeParams {
     sampling?: {};
     prompts?: { listChanged?: boolean };
     resources?: { subscribe?: boolean; listChanged?: boolean };
+    experimental?: {
+      connectionManagement?: boolean;
+      batchRequests?: boolean;
+    };
   };
   clientInfo: {
     name: string;
     version: string;
   };
+}
+
+export interface MCPInitializeResult {
+  protocolVersion: string;
+  capabilities: {
+    tools?: { listChanged?: boolean };
+    prompts?: { listChanged?: boolean };
+    resources?: { subscribe?: boolean; listChanged?: boolean };
+    sampling?: {};
+    experimental?: {
+      connectionManagement?: boolean;
+      batchRequests?: boolean;
+    };
+  };
+  serverInfo: {
+    name: string;
+    version: string;
+  };
+}
+
+export interface MCPConnectionConfig {
+  heartbeatInterval?: number; // 心跳间隔（毫秒）
+  reconnectAttempts?: number; // 重连尝试次数
+  reconnectDelay?: number;    // 重连延迟（毫秒）
+  connectionTimeout?: number; // 连接超时（毫秒）
 }
 

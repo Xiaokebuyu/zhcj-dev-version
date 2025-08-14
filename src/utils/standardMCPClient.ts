@@ -36,16 +36,22 @@ export class StandardMCPClient {
     try {
       console.log(`🔌 初始化MCP服务器: ${this.serverConfig.name} (${this.serverConfig.transport})`);
 
-      // 第一步：发送initialize请求
+      // 第一步：发送initialize请求（使用2025-03-26版本）
       const initResult = await this.sendRequest('initialize', {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-03-26',
         capabilities: {
           tools: { listChanged: true },
-          sampling: {}
+          sampling: {},
+          prompts: { listChanged: true },
+          resources: { subscribe: true, listChanged: true },
+          experimental: {
+            connectionManagement: true,
+            batchRequests: true
+          }
         },
         clientInfo: {
           name: 'zhcj-ai-assistant',
-          version: '1.0.0'
+          version: '2.0.0'
         }
       });
 
