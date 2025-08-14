@@ -14,7 +14,7 @@ export const MCP_SERVERS: MCPServerConfig[] = [
   {
     name: '高德地图',
     // ✅ 你的修正：使用/mcp端点，支持JSON-RPC over HTTP
-    url: `https://mcp.amap.com/mcp?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
+    url: `http://mcp.amap.com/mcp?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
     transport: 'http-stream', // ✅ 你的修正：http-stream协议
     description: '高德地图官方MCP服务，支持12大核心地图服务接口',
     enabled: true,
@@ -26,7 +26,7 @@ export const MCP_SERVERS: MCPServerConfig[] = [
   {
     name: '高德地图-SSE',
     // ✅ SSE端点作为备用，默认禁用
-    url: `https://mcp.amap.com/sse?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
+    url: `http://mcp.amap.com/sse?key=${process.env.NEXT_PUBLIC_AMAP_API_KEY || 'your_amap_api_key'}`,
     transport: 'sse',
     description: '高德地图SSE端点（需要GET请求，暂不支持）',
     enabled: false, // 禁用，因为需要不同的连接方式
