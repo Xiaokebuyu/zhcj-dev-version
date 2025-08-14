@@ -1,5 +1,13 @@
 // src/types/todo.ts
 
+// Claude Code 标准 Todo 类型
+export interface StandardTodo {
+  id: string;
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+// 向后兼容的旧版类型
 export interface TodoTask {
   id: string;
   content: string;
@@ -144,4 +152,57 @@ export class TodoManager {
   }
 }
 
+// Claude Code 标准 Todo 管理器
+export class StandardTodoManager {
+  private static instance: StandardTodoManager;
+  private currentTodos: StandardTodo[] = [];
+
+  static getInstance(): StandardTodoManager {
+    if (!StandardTodoManager.instance) {
+      StandardTodoManager.instance = new StandardTodoManager();
+    }
+    return StandardTodoManager.instance;
+  }
+
+  // 更新所有todos
+  updateTodos(todos: StandardTodo[]): StandardTodo[] {
+    this.currentTodos = todos.map(todo => ({
+      id: todo.id,
+      content: todo.content,
+      status: todo.status
+    }));
+    return this.getCurrentTodos();
+  }
+
+  // 获取当前todos
+  getCurrentTodos(): StandardTodo[] {
+    return [...this.currentTodos];
+  }
+
+  // 检查是否有未完成的任务
+  hasIncompleteTasks(): boolean {
+    return this.currentTodos.some(todo => todo.status !== 'completed');
+  }
+
+  // 获取第一个未完成的任务
+  getFirstIncompleteTodo(): StandardTodo | null {
+    return this.currentTodos.find(todo => todo.status !== 'completed') || null;
+  }
+
+  // 获取进度统计
+  getProgress(): { completed: number; total: number; percentage: number } {
+    const total = this.currentTodos.length;
+    const completed = this.currentTodos.filter(todo => todo.status === 'completed').length;
+    return {
+      completed,
+      total,
+      percentage: total > 0 ? Math.round((completed / total) * 100) : 0
+    };
+  }
+
+  // 清空所有todos
+  clear(): void {
+    this.currentTodos = [];
+  }
+}
 

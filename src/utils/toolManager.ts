@@ -33,12 +33,43 @@ export interface ToolCall {
         }
       }
     },
-    // ===== TodoWrite 工具 =====
+    // ===== 标准 TodoWrite 工具 =====
+    {
+      type: "function",
+      function: {
+        name: "TodoWrite",
+        description: "使用此工具创建和管理任务清单，用于复杂任务、多步操作等场景。将用户需求分解为具体步骤，并跟踪进度。",
+        parameters: {
+          type: "object",
+          properties: {
+            todos: {
+              type: "array",
+              description: "更新后的完整任务列表",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "任务唯一标识符" },
+                  content: { type: "string", description: "任务内容描述，用用户友好的语言" },
+                  status: { 
+                    type: "string", 
+                    enum: ["pending", "in_progress", "completed"],
+                    description: "任务状态：pending（待执行）、in_progress（进行中）、completed（已完成）"
+                  }
+                },
+                required: ["id", "content", "status"]
+              }
+            }
+          },
+          required: ["todos"]
+        }
+      }
+    },
+    // ===== 旧版 TodoWrite 工具（向后兼容）=====
     {
       type: "function",
       function: {
         name: "create_todo_list",
-        description: "创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
+        description: "[已弃用，请使用TodoWrite] 创建任务清单，将用户需求分解为具体步骤。适用于复杂任务、多步操作等场景。",
         parameters: {
           type: "object",
           properties: {
@@ -53,7 +84,7 @@ export interface ToolCall {
       type: "function",
       function: {
         name: "complete_todo_task",
-        description: "标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
+        description: "[已弃用，请使用TodoWrite] 标记任务为已完成。模型完成某个步骤后必须调用此工具更新状态。",
         parameters: {
           type: "object",
           properties: {
@@ -72,7 +103,7 @@ export interface ToolCall {
       type: "function",
       function: {
         name: "add_todo_task",
-        description: "向现有任务清单添加新任务。当发现需要额外步骤时使用。",
+        description: "[已弃用，请使用TodoWrite] 向现有任务清单添加新任务。当发现需要额外步骤时使用。",
         parameters: {
           type: "object",
           properties: {
@@ -87,7 +118,7 @@ export interface ToolCall {
       type: "function",
       function: {
         name: "get_todo_status",
-        description: "获取当前任务清单的状态和进度",
+        description: "[已弃用，请使用TodoWrite] 获取当前任务清单的状态和进度",
         parameters: {
           type: "object",
           properties: {
@@ -636,7 +667,11 @@ export interface ToolCall {
           let result: object;
           
           switch (toolCall.function.name) {
-            // ===== TodoWrite 执行分支 =====
+            // ===== 标准 TodoWrite 工具 =====
+            case 'TodoWrite':
+              result = await this.executeTodoWrite(toolCall.function.arguments);
+              break;
+            // ===== 旧版 TodoWrite 执行分支（向后兼容）=====
             case 'create_todo_list':
               result = await this.createTodoList(toolCall.function.arguments);
               break;
@@ -742,19 +777,79 @@ export interface ToolCall {
       return results;
     }
 
-    // ===== TodoWrite 方法实现 =====
+    // ===== 标准 TodoWrite 工具实现 =====
+    private static async executeTodoWrite(args: string): Promise<object> {
+      try {
+        const { todos } = JSON.parse(args);
+        
+        if (!Array.isArray(todos)) {
+          return { success: false, error: 'todos参数必须是数组' };
+        }
+
+        // 验证todos数组格式
+        for (const todo of todos) {
+          if (!todo.id || !todo.content || !todo.status) {
+            return { 
+              success: false, 
+              error: '每个todo必须包含id、content和status字段' 
+            };
+          }
+          if (!['pending', 'in_progress', 'completed'].includes(todo.status)) {
+            return { 
+              success: false, 
+              error: `无效的status值: ${todo.status}。必须是 pending、in_progress 或 completed` 
+            };
+          }
+        }
+
+        const { StandardTodoManager } = await import('@/types/todo');
+        const todoManager = StandardTodoManager.getInstance();
+        const updatedTodos = todoManager.updateTodos(todos);
+        const progress = todoManager.getProgress();
+
+        console.log('✅ TodoWrite执行成功:', { 
+          todosCount: updatedTodos.length, 
+          progress: `${progress.completed}/${progress.total}` 
+        });
+
+        return {
+          success: true,
+          todos: updatedTodos,
+          progress,
+          message: `任务清单已更新，共${updatedTodos.length}个任务，完成${progress.completed}个`,
+          todo_update: { 
+            type: 'todos_updated', 
+            todos: updatedTodos,
+            progress 
+          }
+        };
+      } catch (error) {
+        console.error('❌ TodoWrite执行失败:', error);
+        return { 
+          success: false, 
+          error: `TodoWrite执行失败: ${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    }
+
+    // ===== 旧版 TodoWrite 方法实现（向后兼容）=====
     private static async createTodoList(args: string): Promise<object> {
       try {
         const { title, tasks } = JSON.parse(args);
+        
+        // 弃用警告
+        console.warn('⚠️ create_todo_list已弃用，建议使用TodoWrite工具替代');
+        
         const { TodoManager } = await import('@/types/todo');
         const todoManager = TodoManager.getInstance();
         const todoList = todoManager.createTodoList(title, tasks);
-        console.log('🧩 create_todo_list:', { title, tasksCount: tasks?.length, todoId: todoList.id });
+        console.log('🧩 create_todo_list（兼容模式）:', { title, tasksCount: tasks?.length, todoId: todoList.id });
         return {
           success: true,
           todoList,
-          message: `已创建任务清单"${title}"，包含${tasks.length}个任务`,
-          todo_update: { type: 'todo_created', todoList }
+          message: `已创建任务清单"${title}"，包含${tasks.length}个任务（建议下次使用TodoWrite工具）`,
+          todo_update: { type: 'todo_created', todoList },
+          deprecation_notice: 'create_todo_list已弃用，请使用TodoWrite工具替代'
         };
       } catch (error) {
         console.error('❌ create_todo_list 失败:', error);
@@ -765,6 +860,10 @@ export interface ToolCall {
     private static async completeTodoTask(args: string): Promise<object> {
       try {
         const { todo_id, task_id, completion_note, task_index, task_content } = JSON.parse(args);
+        
+        // 弃用警告
+        console.warn('⚠️ complete_todo_task已弃用，建议使用TodoWrite工具替代');
+        
         const { TodoManager } = await import('@/types/todo');
         const todoManager = TodoManager.getInstance();
 
@@ -837,11 +936,12 @@ export interface ToolCall {
         return {
           success: true,
           todoList: updatedTodoList,
-          message: completion_note || '任务已完成',
+          message: `${completion_note || '任务已完成'}（建议下次使用TodoWrite工具）`,
           progress,
           all_completed: progress.completed === progress.total,
           todo_update: { type: 'task_completed', todoList: updatedTodoList },
-          resolved: { task_id: resolvedTaskId, from: resolvedFrom }
+          resolved: { task_id: resolvedTaskId, from: resolvedFrom },
+          deprecation_notice: 'complete_todo_task已弃用，请使用TodoWrite工具替代'
         };
       } catch (error) {
         console.error('❌ complete_todo_task 失败:', error);

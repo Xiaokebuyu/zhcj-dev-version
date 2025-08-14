@@ -142,11 +142,20 @@ const SYSTEM_PROMPT = `
 - 涉及工具调用（搜索、发帖、查询等）
 - 用户说"帮我..."、"我想要..."、"需要完成..."
 
-### 执行模式
-1. 理解用户需求 → 立即调用create_todo_list创建任务清单
-2. 开始执行第一个任务
-3. 完成后立即调用complete_todo_task更新状态
+### 执行模式（推荐使用新版TodoWrite工具）
+1. 理解用户需求 → 立即调用TodoWrite创建任务清单
+2. 开始执行第一个任务，并将其状态设为in_progress
+3. 完成后立即调用TodoWrite更新状态为completed
 4. 继续下一个任务直到全部完成
+
+### TodoWrite工具使用规范
+**创建任务清单示例：**
+传入参数：todos数组，每个元素包含id、content、status
+例如：[{id:"1", content:"分析用户需求", status:"pending"}, {id:"2", content:"搜索相关信息", status:"pending"}]
+
+**更新任务状态示例：**
+完成第一个任务后，调用TodoWrite更新状态：
+[{id:"1", content:"分析用户需求", status:"completed"}, {id:"2", content:"搜索相关信息", status:"in_progress"}]
 
 ### 任务分解原则
 - 每个任务是一个有意义的完整操作
@@ -154,11 +163,13 @@ const SYSTEM_PROMPT = `
 - 用用户友好语言描述
 - 避免技术性术语
 
-### 任务管理要求
-- 单一焦点：同时只有一个任务为in_progress状态
-- 实时更新：每完成一步立即更新状态，不要批量更新
-- 透明播报：告诉用户当前正在执行什么步骤
-- 具体分解：任务要具体可执行，避免过于宽泛
+### TodoWrite任务管理要求
+- **单一焦点**：同时只有一个任务为in_progress状态
+- **实时更新**：每完成一步立即调用TodoWrite更新状态，不要批量更新
+- **状态一致性**：每次TodoWrite调用都传入完整的todos数组，确保状态同步
+- **透明播报**：告诉用户当前正在执行什么步骤
+- **具体分解**：任务要具体可执行，避免过于宽泛
+- **ID规则**：使用简单的数字ID（"1", "2", "3"...），便于管理
 
 ## 常见任务行为指导
 
@@ -196,8 +207,14 @@ const SYSTEM_PROMPT = `
 - 导航需求：使用schema工具唤起客户端
 
 ### 任务管理需求  
-- 多步骤任务：必须使用TodoWrite工具
+- 多步骤任务：**强烈推荐**使用新版TodoWrite工具（统一状态管理）
+- 旧版工具：create_todo_list/complete_todo_task等已弃用，但暂时保留兼容性
+- 迁移策略：优先使用TodoWrite，逐步减少旧工具使用
 - 单一操作：直接执行，无需创建清单
+
+### 工具优先级
+1. **TodoWrite（推荐）**：统一状态管理，简化使用
+2. create_todo_list/complete_todo_task（兼容）：复杂但仍可用
 
 ### 内容发布需求
 - 发帖：使用submit_post
@@ -570,7 +587,7 @@ export async function POST(request: NextRequest) {
                   if (remaining) {
                     controller.enqueue(encoder.encode(`data: ${JSON.stringify({
                       type: 'system_instruction',
-                      content: `收尾检查：你还有未完成的任务: "${remaining.content}"。如果该步骤已完成，请立即调用 complete_todo_task 完成状态更新；如果尚未完成，请继续执行该步骤。`,
+                      content: `收尾检查：你还有未完成的任务: "${remaining.content}"。如果该步骤已完成，请立即调用 TodoWrite 更新状态为completed；如果尚未完成，请继续执行该步骤。`,
                       messageId
                     })}\n\n`));
                   }
@@ -695,44 +712,109 @@ function extractPendingTasks(toolResults: any[]): string[] {
 // 🔧 从工具结果中提取最新的 Todo 记忆（用于后续轮次提示模型）
 function buildTodoMemoryFromToolResults(toolResults: any[]): string | null {
   if (!Array.isArray(toolResults) || toolResults.length === 0) return null;
-  let lastTodo: any | null = null;
+  let lastTodos: any[] | null = null;
+  let lastTodoList: any | null = null;
+  
   for (const r of toolResults) {
     try {
       const content = typeof r.content === 'string' ? JSON.parse(r.content) : r.content;
+      
+      // 新版TodoWrite格式
+      if (content?.todo_update?.todos && Array.isArray(content.todo_update.todos)) {
+        lastTodos = content.todo_update.todos;
+      } else if (content?.todos && Array.isArray(content.todos)) {
+        lastTodos = content.todos;
+      }
+      
+      // 旧版兼容
       if (content?.todo_update?.todoList) {
-        lastTodo = content.todo_update.todoList;
+        lastTodoList = content.todo_update.todoList;
       } else if (content?.todoList) {
-        lastTodo = content.todoList;
+        lastTodoList = content.todoList;
       }
     } catch {}
   }
-  if (!lastTodo) return null;
-  const currentTask = (lastTodo.tasks || []).find((t: any) => t.id === lastTodo.current_task_id);
-  const lines = [
-    '[TodoMemory]',
-    `active_todo_id: ${lastTodo.id}`,
-    `current_task_id: ${lastTodo.current_task_id || ''}`,
-    `progress: ${lastTodo.completed_tasks}/${lastTodo.total_tasks}`,
-    `current_task_content: ${currentTask?.content || ''}`
-  ];
-  return lines.join('\n');
+
+  // 优先使用新版格式
+  if (lastTodos) {
+    const total = lastTodos.length;
+    const completed = lastTodos.filter((t: any) => t.status === 'completed').length;
+    const inProgress = lastTodos.find((t: any) => t.status === 'in_progress');
+    
+    const lines = [
+      '[TodoMemory]',
+      `format: standard`,
+      `progress: ${completed}/${total}`,
+      `current_task: ${inProgress?.content || 'none'}`,
+      `all_tasks: ${lastTodos.map((t: any) => `${t.id}:${t.status}`).join(', ')}`
+    ];
+    return lines.join('\n');
+  }
+  
+  // 回退到旧版格式
+  if (lastTodoList) {
+    const currentTask = (lastTodoList.tasks || []).find((t: any) => t.id === lastTodoList.current_task_id);
+    const lines = [
+      '[TodoMemory]',
+      `format: legacy`,
+      `active_todo_id: ${lastTodoList.id}`,
+      `current_task_id: ${lastTodoList.current_task_id || ''}`,
+      `progress: ${lastTodoList.completed_tasks}/${lastTodoList.total_tasks}`,
+      `current_task_content: ${currentTask?.content || ''}`
+    ];
+    return lines.join('\n');
+  }
+  
+  return null;
 }
 
 // 🔧 提取最近一次包含的 TodoList 对象（供自动收尾使用）
 function extractLatestTodoList(toolResults: any[]): any | null {
   if (!Array.isArray(toolResults)) return null;
-  let lastTodo: any | null = null;
+  let lastTodos: any[] | null = null;
+  let lastTodoList: any | null = null;
+  
   for (const r of toolResults) {
     try {
       const content = typeof r.content === 'string' ? JSON.parse(r.content) : r.content;
+      
+      // 新版TodoWrite格式
+      if (content?.todo_update?.todos && Array.isArray(content.todo_update.todos)) {
+        lastTodos = content.todo_update.todos;
+      } else if (content?.todos && Array.isArray(content.todos)) {
+        lastTodos = content.todos;
+      }
+      
+      // 旧版兼容
       if (content?.todo_update?.todoList) {
-        lastTodo = content.todo_update.todoList;
+        lastTodoList = content.todo_update.todoList;
       } else if (content?.todoList) {
-        lastTodo = content.todoList;
+        lastTodoList = content.todoList;
       }
     } catch {}
   }
-  return lastTodo;
+
+  // 优先返回新版格式，转换为旧版兼容结构
+  if (lastTodos) {
+    const total = lastTodos.length;
+    const completed = lastTodos.filter((t: any) => t.status === 'completed').length;
+    const inProgress = lastTodos.find((t: any) => t.status === 'in_progress');
+    
+    return {
+      id: 'standard_todos',
+      tasks: lastTodos.map((t: any) => ({
+        id: t.id,
+        content: t.content,
+        status: t.status
+      })),
+      total_tasks: total,
+      completed_tasks: completed,
+      current_task_id: inProgress?.id
+    };
+  }
+  
+  // 回退到旧版格式
+  return lastTodoList;
 }
 
 // 🔑 监控pending任务

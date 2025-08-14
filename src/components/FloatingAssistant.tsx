@@ -1423,9 +1423,42 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                   // ✅ 捕获 TodoWrite 的 todo_update 并更新本地展示
                   try {
                     const r = parsed.result;
-                    if (r && r.todo_update && r.todo_update.todoList) {
+                    
+                    // 新版 TodoWrite 格式处理
+                    if (r && r.todo_update && r.todo_update.todos && Array.isArray(r.todo_update.todos)) {
+                      const todos = r.todo_update.todos;
+                      const progress = r.todo_update.progress || { completed: 0, total: todos.length };
+                      
+                      // 转换为旧版TodoList格式，复用现有组件
+                      const convertedTodoList: TodoList = {
+                        id: 'standard_todos',
+                        title: '任务清单',
+                        tasks: todos.map((todo: any) => ({
+                          id: todo.id,
+                          content: todo.content,
+                          status: todo.status,
+                          created_at: Date.now(),
+                          ...(todo.status === 'completed' && { completed_at: Date.now() })
+                        })),
+                        created_at: Date.now(),
+                        updated_at: Date.now(),
+                        total_tasks: progress.total,
+                        completed_tasks: progress.completed,
+                        current_task_id: todos.find((t: any) => t.status === 'in_progress')?.id
+                      };
+                      
+                      console.log('📝 TodoWrite更新事件:', r.todo_update.type, {
+                        todosCount: todos.length,
+                        progress: `${progress.completed}/${progress.total}`
+                      });
+                      
+                      setActiveTodoList(convertedTodoList);
+                      openTodoPanelAuto();
+                    }
+                    // 旧版兼容处理
+                    else if (r && r.todo_update && r.todo_update.todoList) {
                       const tl = r.todo_update.todoList as TodoList;
-                      console.log('📝 Todo更新事件:', r.todo_update.type, {
+                      console.log('📝 Todo更新事件（兼容模式）:', r.todo_update.type, {
                         id: tl.id,
                         title: tl.title,
                         current_task_id: tl.current_task_id,
