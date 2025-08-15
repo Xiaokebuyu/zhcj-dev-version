@@ -884,7 +884,19 @@ async function monitorPendingTasks(
         console.log('🎉 所有OpenManus任务完成，继续Kimi推理');
         
         // 继续Kimi推理
-        await continueWithToolResults(messages, toolCalls, updatedResults, controller, encoder, messageId, satoken, model, temperature, max_tokens
+        await continueWithToolResults(
+          messages, 
+          toolCalls, 
+          updatedResults, 
+          controller, 
+          encoder, 
+          messageId, 
+          satoken, 
+          model, 
+          temperature, 
+          max_tokens,
+          buildTodoMemoryFromToolResults(updatedResults) || undefined,
+          0 // 重置递归深度
           // top_p,
           // frequency_penalty
         );
@@ -913,10 +925,28 @@ async function continueWithToolResults(
   model?: string,
   temperature?: number,
   max_tokens?: number,
-  todoMemory?: string
+  todoMemory?: string,
+  currentDepth = 0
   // top_p?: number,
   // frequency_penalty?: number
 ) {
+  const MAX_RECURSION_DEPTH = 30; // 防止无限递归
+  
+  if (currentDepth >= MAX_RECURSION_DEPTH) {
+    console.warn('⚠️ 达到最大递归深度，强制结束');
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+      type: 'warning',
+      content: '任务执行达到最大轮次，已强制结束。',
+      messageId
+    })}\n\n`));
+    
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+      type: 'done',
+      final_content: '',
+      messageId
+    })}\n\n`));
+    return;
+  }
       try {
     console.log('🔄 使用工具结果继续Kimi推理');
     
@@ -1027,7 +1057,7 @@ async function continueWithToolResults(
               while (localToolCalls.length <= index) {
                 localToolCalls.push({
                   id: `temp_${index}`,
-                  type: 'function',
+                  type: 'function' as const,
                   function: { name: '', arguments: '' }
                 });
               }
@@ -1054,7 +1084,7 @@ async function continueWithToolResults(
         messageId
       })}\n\n`));
 
-      const newToolResults = await executeTools(validToolCalls, controller, encoder, messageId, satoken);
+      const newToolResults: any[] = await executeTools(validToolCalls, controller, encoder, messageId, satoken);
 
       // 检测pending任务
       const pendingOpenManusTasks = extractPendingTasks(newToolResults);
@@ -1094,22 +1124,42 @@ async function continueWithToolResults(
         satoken, 
         model, 
         temperature, 
-        max_tokens
+        max_tokens,
+        buildTodoMemoryFromToolResults(newToolResults) || undefined,
+        currentDepth + 1
         // top_p,
         // frequency_penalty
       );
       return;
     }
 
-    // 若无更多工具调用，则发送完成信号
+    // 🔑 关键修改：如果本轮没有工具调用，检查Todo完成度
+    const todoReminderResult = await checkAndSendTodoReminder(
+      fullMessages,
+      toolResults,
+      controller,
+      encoder,
+      messageId,
+      satoken,
+      model,
+      temperature,
+      max_tokens,
+      currentDepth
+    );
+    
+    if (todoReminderResult.sentReminder) {
+      console.log('📝 已发送Todo完成提醒，等待AI响应...');
+      return; // 提醒已发送，新的递归将在响应中处理
+    }
+    
+    // 真正的结束条件：无工具调用 && 无未完成Todo
     controller.enqueue(encoder.encode(`data: ${JSON.stringify({
       type: 'done',
       final_content: finalContent,
       messageId
     })}\n\n`));
 
-    console.log('✅ Kimi推理完成');
-
+    console.log('✅ 所有任务已完成，递归结束');
     controller.close();
   } catch (error) {
     console.error('❌ 续写Kimi推理失败:', error);
@@ -1128,4 +1178,368 @@ export async function GET() {
     supportedModels: ['kimi-k2-turbo-preview'],
     features: ['工具调用', '流式响应', 'OpenManus集成']
   });
+}
+
+// 🆕 Todo提醒检查和API请求发送函数
+async function checkAndSendTodoReminder(
+  fullMessages: any[],
+  toolResults: any[],
+  controller: any,
+  encoder: any,
+  messageId: string,
+  satoken?: string,
+  model?: string,
+  temperature?: number,
+  max_tokens?: number,
+  currentDepth = 0
+): Promise<{ sentReminder: boolean; reason?: string }> {
+  try {
+    // 🔍 检查两套Todo系统的完成度
+    const incompleteInfo = await analyzeIncompleteTodos(toolResults);
+    
+    if (!incompleteInfo.hasIncomplete) {
+      console.log('✅ 所有Todo都已完成，无需提醒');
+      return { sentReminder: false };
+    }
+    
+    // 🔔 构造提醒消息
+    const reminderMessage = buildTodoReminderMessage(incompleteInfo);
+    
+    // 📨 发送提醒API请求
+    console.log('🔔 检测到未完成任务，发送提醒API请求:', incompleteInfo.summary);
+    
+    await sendTodoReminderApiRequest(
+      fullMessages,
+      reminderMessage,
+      toolResults,
+      controller,
+      encoder,
+      messageId,
+      satoken,
+      model,
+      temperature,
+      max_tokens,
+      currentDepth + 1
+    );
+    
+    return { 
+      sentReminder: true, 
+      reason: incompleteInfo.summary 
+    };
+    
+  } catch (error) {
+    console.error('❌ Todo提醒处理失败:', error);
+    return { sentReminder: false };
+  }
+}
+
+// 🔍 分析未完成Todo的统一函数
+async function analyzeIncompleteTodos(toolResults: any[]): Promise<{
+  hasIncomplete: boolean;
+  summary?: string;
+  details?: {
+    standardTodos?: any[];
+    legacyTodoList?: any;
+    standardIncompleteCount?: number;
+    legacyIncompleteCount?: number;
+  };
+}> {
+  try {
+    const details: any = {};
+    const summaryParts: string[] = [];
+    let hasAnyIncomplete = false;
+    
+    // 🆕 检查新版TodoWrite系统
+    const latestStandardTodos = extractLatestStandardTodos(toolResults);
+    if (latestStandardTodos && Array.isArray(latestStandardTodos) && latestStandardTodos.length > 0) {
+      const incompleteTodos = latestStandardTodos.filter(todo => 
+        todo && typeof todo === 'object' && todo.status !== 'completed'
+      );
+      if (incompleteTodos.length > 0) {
+        hasAnyIncomplete = true;
+        details.standardTodos = latestStandardTodos;
+        details.standardIncompleteCount = incompleteTodos.length;
+        summaryParts.push(`TodoWrite系统: ${incompleteTodos.length}个未完成`);
+      }
+    }
+    
+    // 🗂️ 检查旧版todo-list系统
+    const latestLegacyTodo = extractLatestTodoList(toolResults);
+    if (latestLegacyTodo && 
+        typeof latestLegacyTodo.total_tasks === 'number' && 
+        typeof latestLegacyTodo.completed_tasks === 'number') {
+      const incompleteCount = latestLegacyTodo.total_tasks - latestLegacyTodo.completed_tasks;
+      if (incompleteCount > 0) {
+        hasAnyIncomplete = true;
+        details.legacyTodoList = latestLegacyTodo;
+        details.legacyIncompleteCount = incompleteCount;
+        summaryParts.push(`todo-list系统: ${incompleteCount}个未完成`);
+      }
+    }
+    
+    return {
+      hasIncomplete: hasAnyIncomplete,
+      summary: summaryParts.length > 0 ? summaryParts.join('，') : undefined,
+      details: hasAnyIncomplete ? details : undefined
+    };
+    
+  } catch (error) {
+    console.error('分析Todo完成度失败:', error);
+    return { hasIncomplete: false };
+  }
+}
+
+// 🆕 提取最新的StandardTodo数组
+function extractLatestStandardTodos(toolResults: any[]): any[] | null {
+  for (const result of [...toolResults].reverse()) {
+    try {
+      if (!result || !result.content) continue;
+      
+      const content = typeof result.content === 'string' ? 
+        JSON.parse(result.content) : result.content;
+      
+      if (content && typeof content === 'object') {
+        if (content.todo_update?.todos && Array.isArray(content.todo_update.todos)) {
+          return content.todo_update.todos;
+        } else if (content.todos && Array.isArray(content.todos)) {
+          return content.todos;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+// 🔔 构造智能提醒消息
+function buildTodoReminderMessage(incompleteInfo: any): string {
+  const lines = [
+    "🔍 任务完成度检查：",
+    "",
+    `检测到你还有未完成的任务（${incompleteInfo.summary || '未知数量'}）。`,
+    "",
+    "请检查以下情况：",
+    "1. 如果这些任务确实已经完成，请立即调用相应的工具更新状态",
+    "2. 如果还有步骤需要执行，请继续完成并更新状态", 
+    "3. 如果任务不再需要，也请明确说明原因",
+    "",
+    "具体未完成的任务："
+  ];
+  
+  // 🆕 列出StandardTodo系统的未完成任务
+  if (incompleteInfo.details?.standardTodos && Array.isArray(incompleteInfo.details.standardTodos)) {
+    const incompleteTodos = incompleteInfo.details.standardTodos.filter(
+      (todo: any) => todo && typeof todo === 'object' && todo.status !== 'completed'
+    );
+    if (incompleteTodos.length > 0) {
+      lines.push("", "📋 TodoWrite系统:");
+      incompleteTodos.forEach((todo: any, index: number) => {
+        const statusIcon = todo.status === 'in_progress' ? '🔄' : '⏸️';
+        const content = todo.content || '未知任务';
+        lines.push(`${index + 1}. ${statusIcon} ${content} (${todo.status || 'unknown'})`);
+      });
+    }
+  }
+  
+  // 🗂️ 列出legacy系统的未完成任务  
+  if (incompleteInfo.details?.legacyTodoList && 
+      incompleteInfo.details.legacyTodoList.tasks && 
+      Array.isArray(incompleteInfo.details.legacyTodoList.tasks)) {
+    const todoList = incompleteInfo.details.legacyTodoList;
+    const incompleteTasks = todoList.tasks.filter(
+      (task: any) => task && typeof task === 'object' && task.status !== 'completed'
+    );
+    
+    if (incompleteTasks.length > 0) {
+      lines.push("", "📝 传统todo-list系统:");
+      incompleteTasks.forEach((task: any, index: number) => {
+        const statusIcon = task.status === 'in_progress' ? '🔄' : '⏸️';
+        const content = task.content || '未知任务';
+        lines.push(`${index + 1}. ${statusIcon} ${content} (${task.status || 'unknown'})`);
+      });
+    }
+  }
+  
+  lines.push("", "请根据实际情况处理这些任务。");
+  
+  return lines.join('\n');
+}
+
+// 📨 发送提醒API请求
+async function sendTodoReminderApiRequest(
+  fullMessages: any[],
+  reminderMessage: string,
+  toolResults: any[],
+  controller: any,
+  encoder: any,
+  messageId: string,
+  satoken?: string,
+  model?: string,
+  temperature?: number,
+  max_tokens?: number,
+  nextDepth = 1
+) {
+  try {
+    // 🔄 向用户显示正在发送提醒
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+      type: 'system_instruction',
+      content: '🔍 检测到未完成任务，正在提醒AI完成所有步骤...',
+      messageId
+    })}\n\n`));
+    
+    // 📝 构造包含提醒的新消息历史
+    const reminderMessages: any[] = [
+      ...fullMessages,
+      ...toolResults.map((r: any) => ({
+        role: 'tool' as const,
+        tool_call_id: r.tool_call_id,
+        content: typeof r.content === 'string' ? r.content : JSON.stringify(r.content)
+      })),
+      {
+        role: 'user' as const,
+        content: reminderMessage
+      }
+    ];
+    
+    // 🎯 添加Todo记忆到系统消息
+    const todoMemory = buildTodoMemoryFromToolResults(toolResults);
+    let systemMessage = SYSTEM_PROMPT;
+    if (todoMemory && typeof todoMemory === 'string') {
+      systemMessage += `\n\n${todoMemory}`;
+    }
+    
+    const requestMessages: any[] = [
+      { role: 'system' as const, content: systemMessage },
+      ...reminderMessages.slice(1) // 去掉原来的system消息
+    ];
+    
+    // 🚀 发送API请求
+    const response = await fetch('https://api.moonshot.cn/v1/chat/completions', { // 使用实际的API URL
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${satoken || process.env.MOONSHOT_API_KEY}`, // 使用实际的API密钥
+      },
+      body: JSON.stringify({
+        model: model || 'kimi-k2-turbo-preview',
+        messages: requestMessages,
+        stream: true,
+        temperature: temperature || 0.7,
+        max_tokens: max_tokens || 4000,
+        tools: await getToolDefinitions(), // 使用getToolDefinitions获取工具定义
+        tool_choice: 'auto'
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API请求失败: ${response.status}`);
+    }
+    
+    // 📖 处理流式响应 - 复用现有的流处理逻辑
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('无法读取响应流');
+    
+    let finalContent = '';
+    const localToolCalls: ToolCall[] = [];
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const text = new TextDecoder().decode(value);
+      const lines = text.split('\n').filter(line => line.trim().startsWith('data: '));
+      
+      for (const line of lines) {
+        if (line.includes('[DONE]')) continue;
+        
+        try {
+          const data = JSON.parse(line.substring(6));
+          const delta = data.choices?.[0]?.delta;
+          
+          if (delta?.content) {
+            finalContent += delta.content;
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+              type: 'content',
+              content: delta.content,
+              messageId
+            })}\n\n`));
+          }
+          
+          // 处理工具调用
+          if (delta?.tool_calls) {
+            delta.tool_calls.forEach((toolCall: any) => {
+              if (typeof toolCall.index === 'number') {
+                const index = toolCall.index;
+                
+                while (localToolCalls.length <= index) {
+                  localToolCalls.push({
+                    id: `temp_${index}`,
+                    type: 'function' as const,
+                    function: { name: '', arguments: '' }
+                  });
+                }
+                
+                if (toolCall.id) localToolCalls[index].id = toolCall.id;
+                if (toolCall.function?.name) localToolCalls[index].function.name = toolCall.function.name;
+                if (toolCall.function?.arguments) localToolCalls[index].function.arguments += toolCall.function.arguments;
+              }
+            });
+          }
+        } catch (e) {
+          console.error('解析提醒响应错误:', e);
+        }
+      }
+    }
+    
+    // 🔄 如果有新的工具调用，继续递归
+    const validToolCalls: ToolCall[] = localToolCalls.filter(tc => 
+      tc.function.name && tc.function.arguments && !tc.id.startsWith('temp_')
+    );
+    
+    if (validToolCalls.length > 0) {
+      console.log('🛠️ 提醒响应中包含工具调用，继续执行...');
+      
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+        type: 'tool_execution',
+        tool_calls: validToolCalls,
+        messageId
+      })}\n\n`));
+      
+      const newToolResults: any[] = await executeTools(validToolCalls, controller, encoder, messageId, satoken);
+      
+      // 🔄 继续递归（这里会重新检查Todo完成度）
+      await continueWithToolResults(
+        reminderMessages,
+        validToolCalls,
+        newToolResults,
+        controller,
+        encoder,
+        messageId,
+        satoken,
+        model,
+        temperature,
+        max_tokens,
+        buildTodoMemoryFromToolResults(newToolResults) || undefined,
+        nextDepth
+      );
+    } else {
+      // 📝 提醒后仍无工具调用，结束递归
+      console.log('💭 AI收到提醒后未调用工具，可能认为任务已完成');
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+        type: 'done',
+        final_content: finalContent,
+        messageId
+      })}\n\n`));
+      controller.close();
+    }
+    
+  } catch (error) {
+    console.error('❌ 发送Todo提醒失败:', error);
+    // 失败时直接结束，避免无限递归
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+      type: 'error',
+      error: '任务提醒发送失败',
+      messageId
+    })}\n\n`));
+    controller.close();
+  }
 }
