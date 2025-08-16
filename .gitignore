@@ -147,3 +147,4 @@ pnpm-debug.log*
 
 chinese_voices_samples/
 kokoro/
+@kokoro/
