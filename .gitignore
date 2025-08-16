@@ -144,3 +144,6 @@ pnpm-debug.log*
 @/dis
 @/doubaovoice_demo
 @/OpenManus
+
+chinese_voices_samples/
+kokoro/
