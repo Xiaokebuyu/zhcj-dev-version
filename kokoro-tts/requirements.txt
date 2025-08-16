@@ -1,0 +1,19 @@
+
+# 核心框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# Kokoro TTS
+kokoro-tts>=0.1.0
+
+# 音频处理
+numpy>=1.24.0
+scipy>=1.10.0
+
+# 日志
+loguru>=0.7.0
+
+# 其他工具
+python-multipart>=0.0.6
+aiofiles>=23.0.0

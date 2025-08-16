@@ -31,13 +31,12 @@ interface FloatingAssistantProps {
   contextPayload?: { context: PageContext, forced: boolean } | null;
 }
 
+// 默认语音选项（当无法获取Kokoro语音时使用）
 const VOICE_OPTIONS = [
-  { id: 'xiaoxiao', name: '晓晓（温柔女声）' },
-  { id: 'xiaoyi', name: '晓伊（活泼女声）' },
-  { id: 'yunjian', name: '云健（成熟男声）' },
-  { id: 'yunxi', name: '云希（年轻男声）' },
-  { id: 'xiaomo', name: '晓墨（甜美女声）' },
-  { id: 'xiaoxuan', name: '晓萱（知性女声）' },
+  { id: 'zf_001', name: '中文女声 (zf_001)' },
+  { id: 'zf_002', name: '中文女声 (zf_002)' },
+  { id: 'zm_001', name: '中文男声 (zm_001)' },
+  { id: 'zm_002', name: '中文男声 (zm_002)' },
 ];
 
 // 添加 ChatView 组件
@@ -213,14 +212,17 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     confidence: 0
   });
   
-  // 语音设置
-  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
-    voice: 'xiaoxiao',
-    rate: '0%',
-    pitch: '0%',
-    volume: '0%',
-    autoPlay: true,
-  });
+  // 语音设置 - 更新为Kokoro语音
+const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
+  voice: 'zf_001',  // 更新为kokoro语音
+  rate: '1.0',      // 改为倍数格式
+  pitch: '0%',      // 保持原有格式，API会处理转换
+  volume: '0%',
+  autoPlay: true
+});
+
+// 可用语音列表状态
+const [availableVoices, setAvailableVoices] = useState<Array<{id: string, name: string, displayName: string}>>([]);
 
   // 工具调用状态
   const [toolProgress, setToolProgress] = useState<ToolProgress>({
@@ -997,12 +999,15 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     }));
   }, []);
 
-  // 生成语音
+  // 生成语音 - 支持Kokoro流式TTS
   const generateSpeech = useCallback(async (text: string): Promise<string | null> => {
     if (!enableVoice || !text.trim()) return null;
 
     try {
-      const response = await fetch('/api/tts', {
+      console.log('🎤 开始流式Kokoro TTS:', text.substring(0, 50));
+
+      // 🔧 改为stream模式，获得真正的流式音频
+      const response = await fetch('/api/kokoro-tts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1010,23 +1015,53 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
         body: JSON.stringify({
           text: text,
           voice: voiceSettings.voice,
-          rate: voiceSettings.rate,
-          pitch: voiceSettings.pitch,
-          volume: voiceSettings.volume,
+          speed: parseFloat(voiceSettings.rate),
+          stream: true  // 🚀 启用真正的流式
         }),
       });
 
       if (!response.ok) {
-        throw new Error('语音生成失败');
+        throw new Error(`Kokoro TTS失败: ${response.status}`);
       }
 
-      // 创建音频URL
+      // 🔧 处理流式音频响应
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
-      
+
+      console.log('✅ 流式Kokoro TTS完成');
       return audioUrl;
+
     } catch (error) {
-      console.error('语音生成错误:', error);
+      console.error('❌ 流式Kokoro TTS失败，尝试快速降级:', error);
+      
+      // 🚀 快速降级策略：对短句使用Edge TTS（更快）
+      if (text.length <= 20) {
+        try {
+          const fallbackResponse = await fetch('/api/tts', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: text,
+              voice: 'xiaoxiao',
+              rate: '+20%',  // 稍微加快速度
+              pitch: voiceSettings.pitch,
+              volume: voiceSettings.volume,
+            }),
+          });
+
+          if (fallbackResponse.ok) {
+            const audioBlob = await fallbackResponse.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+            console.log('✅ Edge TTS快速降级成功');
+            return audioUrl;
+          }
+        } catch (fallbackError) {
+          console.error('❌ Edge TTS降级失败:', fallbackError);
+        }
+      }
+
       return null;
     }
   }, [enableVoice, voiceSettings]);
@@ -1281,6 +1316,69 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     let currentFinalContent = '';
     let currentFinalMessageId = '';
 
+    // 🔧 本地音频队列函数
+    const enqueueAudioLocal = (url: string) => {
+      if (!url) return;
+      console.log('🔊 加入音频队列:', url);
+      audioQueueRef.current.push(url);
+      if (!isAudioPlayingRef.current) {
+        const audioElement = audioRef.current;
+        if (audioElement && audioQueueRef.current.length > 0) {
+          const nextUrl = audioQueueRef.current.shift() as string;
+          isAudioPlayingRef.current = true;
+          audioElement.src = nextUrl;
+          console.log('▶️ 播放音频:', nextUrl);
+          audioElement.play().catch(err => {
+            console.error('音频播放失败:', err);
+            // 失败时标记为未播放状态，以便后续重试
+            isAudioPlayingRef.current = false;
+          });
+        }
+      }
+    };
+
+    // 本地句子提取函数
+    const extractSentencesLocal = (text: string): { completed: string[]; remaining: string } => {
+      const SENTENCE_END_REGEX = /[。！？.!?，,]/;
+      const parts = text.split(SENTENCE_END_REGEX);
+      const endings = text.match(/[。！？.!?，,]/g) || [];
+
+      const completed: string[] = [];
+      for (let i = 0; i < endings.length; i++) {
+        completed.push(parts[i] + endings[i]);
+      }
+
+      const remaining = parts.length > endings.length ? parts[parts.length - 1] : '';
+      return { completed, remaining };
+    };
+
+    // 🔧 确保可以访问流式TTS函数
+    const processStreamingSpeechLocal = (messageId: string, deltaText: string) => {
+      if (!enableVoice || !voiceSettings.autoPlay) return;
+
+      // 累积待朗读文本
+      speechBufferRef.current[messageId] = (speechBufferRef.current[messageId] || '') + deltaText;
+
+      const { completed, remaining } = extractSentencesLocal(speechBufferRef.current[messageId]);
+      // 更新缓冲区，保留未完整结束的句子
+      speechBufferRef.current[messageId] = remaining;
+
+      for (const sentence of completed) {
+        // 对每个完整句子请求 TTS，并加入播放队列
+        try {
+          generateSpeech(sentence).then(audioUrl => {
+            if (audioUrl) {
+              enqueueAudioLocal(audioUrl);
+            }
+          }).catch(err => {
+            console.error('增量TTS生成失败:', err);
+          });
+        } catch (err) {
+          console.error('增量TTS生成失败:', err);
+        }
+      }
+    };
+
     const triggerTTSForSegment = (content: string, messageId: string) => {
       if (voiceSettings.autoPlay && content.trim()) {
         generateSpeech(content).then(audioUrl => {
@@ -1362,6 +1460,12 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                       return updated;
                     }
                   });
+
+                  // 🚀 关键修复：添加实时TTS处理
+                  if (incrementalTTS && parsed.content) {
+                    processStreamingSpeechLocal(finalId, parsed.content);
+                  }
+                  
                   break;
                 }
 
@@ -1638,7 +1742,7 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     } finally {
       reader.releaseLock();
     }
-  }, [setMessages, setToolProgress, voiceSettings.autoPlay, generateSpeech, playAudio]);
+  }, [setMessages, setToolProgress, voiceSettings.autoPlay, generateSpeech, playAudio, enableVoice]);
 
   // 🆕 启动OpenManus任务监控
   const startTaskMonitoring = useCallback((taskIds: string[], messageId: string) => {
@@ -1966,6 +2070,40 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     };
   }, [enableVoice, sttConfig, handleSTTEvent]);
   
+  // 获取可用语音列表
+  useEffect(() => {
+    const fetchVoices = async () => {
+      try {
+        // 优先获取Kokoro语音
+        const kokoroResponse = await fetch('/api/kokoro-tts');
+        if (kokoroResponse.ok) {
+          const kokoroData = await kokoroResponse.json();
+          setAvailableVoices(kokoroData.voices || []);
+          return;
+        }
+      } catch (error) {
+        console.warn('获取Kokoro语音失败，尝试Edge TTS:', error);
+      }
+
+      // 降级到Edge TTS语音
+      try {
+        const edgeResponse = await fetch('/api/tts');
+        if (edgeResponse.ok) {
+          const edgeData = await edgeResponse.json();
+          setAvailableVoices(edgeData.voices || []);
+        }
+      } catch (error) {
+        console.error('获取语音列表完全失败:', error);
+        // 设置默认语音
+        setAvailableVoices([
+          { id: 'zf_001', name: 'zf_001', displayName: '中文女声' }
+        ]);
+      }
+    };
+
+    fetchVoices();
+  }, []);
+
   // 监听消息变化，自动滚动到底部
   useEffect(() => {
     // 只有当用户在底部附近时才自动滚动
@@ -2013,14 +2151,18 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     }
   }, [enableVoice, onError]);
 
-  // 重新生成语音
+  // 重新生成语音 - 使用Kokoro TTS
   const regenerateSpeech = async (messageId: string, text: string) => {
+    console.log('🔄 重新生成语音:', messageId, text.substring(0, 50));
     const audioUrl = await generateSpeech(text);
     if (audioUrl) {
       setMessages(prev => prev.map(msg => 
         msg.id === messageId ? { ...msg, audioUrl } : msg
       ));
       playAudio(audioUrl);
+      console.log('✅ 语音重新生成成功');
+    } else {
+      console.error('❌ 语音重新生成失败');
     }
   };
 
@@ -2257,33 +2399,37 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
   // =============== 增量流式语音朗读相关 ===============
 
   // 用于在音频播放结束时继续播放队列中的下一个音频
-  function playNextAudio() {
+  const playNextAudio = useCallback(() => {
     const audioElement = audioRef.current;
     if (!audioElement) return;
 
     if (audioQueueRef.current.length === 0) {
       isAudioPlayingRef.current = false;
+      console.log('🔇 音频队列播放完毕');
       return;
     }
 
     const nextUrl = audioQueueRef.current.shift() as string;
     isAudioPlayingRef.current = true;
     audioElement.src = nextUrl;
+    
+    console.log('▶️ 播放音频:', nextUrl);
     audioElement.play().catch(err => {
       console.error('音频播放失败:', err);
       // 如果当前片段播放失败，尝试播放下一个
       playNextAudio();
     });
-  }
+  }, []);
 
   // 将音频URL加入队列，若当前没有播放则立即播放
-  function enqueueAudio(url: string) {
+  const enqueueAudio = useCallback((url: string) => {
     if (!url) return;
+    console.log('🔊 加入音频队列:', url);
     audioQueueRef.current.push(url);
     if (!isAudioPlayingRef.current) {
       playNextAudio();
     }
-  }
+  }, [playNextAudio]);
 
   // 在组件挂载时绑定 audio 元素的 ended 事件，以便自动播放下一个音频
   useEffect(() => {
@@ -2302,21 +2448,79 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
 
   // 将增量文本拆分为完整句子与剩余部分
   function extractSentences(text: string): { completed: string[]; remaining: string } {
-    // 根据中英文常见句号、感叹号、问号进行分句
-    const SENTENCE_END_REGEX = /[。！？.!?]/;
+    // 🔧 更激进的分句策略，减少单句长度
+    const SENTENCE_END_REGEX = /[。！？.!?]|[\n\r]+|，(?=.{10,})|、(?=.{8,})/g;
     const parts = text.split(SENTENCE_END_REGEX);
-    const endings = text.match(/[。！？.!?]/g) || [];
+    const endings = text.match(/[。！？.!?]|[\n\r]+|，|、/g) || [];
 
     const completed: string[] = [];
     for (let i = 0; i < endings.length; i++) {
-      completed.push(parts[i] + endings[i]);
+      const sentence = (parts[i] + endings[i]).trim();
+      // 🔧 过滤太短的片段，避免碎片化
+      if (sentence.length >= 3) {
+        completed.push(sentence);
+      }
     }
 
     const remaining = parts.length > endings.length ? parts[parts.length - 1] : '';
     return { completed, remaining };
   }
 
-  // 处理增量到来的文本并生成对应的语音
+  // -- 增量流式朗读开关。如果为 true，则在生成回复时实时播放分句语音。
+  const incrementalTTS = true; // 🔧 改为true，启用完全流式体验
+
+  // 🔧 预加载策略管理
+  const preloadQueue = useRef<Array<{text: string, messageId: string}>>([]);
+  const isPreloading = useRef<boolean>(false);
+
+  // 处理增量到来的文本并生成对应的语音 - 启用真正的增量TTS
+  const processStreamingSpeechOptimized = useCallback(async (messageId: string, deltaText: string) => {
+    if (!enableVoice || !voiceSettings.autoPlay) return;
+
+    // 累积待朗读文本
+    speechBufferRef.current[messageId] = (speechBufferRef.current[messageId] || '') + deltaText;
+
+    const { completed, remaining } = extractSentences(speechBufferRef.current[messageId]);
+    speechBufferRef.current[messageId] = remaining;
+
+    for (const sentence of completed) {
+      if (sentence.trim()) {
+        // 🚀 立即处理当前句子
+        try {
+          const audioUrl = await generateSpeech(sentence);
+          if (audioUrl) {
+            enqueueAudio(audioUrl);
+          }
+        } catch (err) {
+          console.error('TTS生成失败:', err);
+        }
+      }
+    }
+
+    // 🔧 预加载策略：如果缓冲区有足够内容，开始预加载下一句
+    if (remaining.length > 15 && !isPreloading.current) {
+      isPreloading.current = true;
+      
+      // 尝试预测下一个可能的句子
+      const potentialNext = remaining.slice(0, 30) + '...';
+      preloadQueue.current.push({ text: potentialNext, messageId });
+      
+      // 异步预加载
+      setTimeout(() => {
+        if (preloadQueue.current.length > 0) {
+          const { text } = preloadQueue.current.shift()!;
+          generateSpeech(text).then(() => {
+            console.log('📦 预加载完成:', text.substring(0, 20));
+            isPreloading.current = false;
+          }).catch(() => {
+            isPreloading.current = false;
+          });
+        }
+      }, 100);
+    }
+  }, [enableVoice, voiceSettings.autoPlay, generateSpeech, enqueueAudio]);
+
+  // 处理增量到来的文本并生成对应的语音 - 启用真正的增量TTS
   const processStreamingSpeech = useCallback(async (messageId: string, deltaText: string) => {
     if (!enableVoice || !voiceSettings.autoPlay) return;
 
@@ -2328,20 +2532,32 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
     speechBufferRef.current[messageId] = remaining;
 
     for (const sentence of completed) {
-      // 对每个完整句子请求 TTS，并加入播放队列
+      // 对每个完整句子请求 Kokoro TTS，并加入播放队列
       try {
         const audioUrl = await generateSpeech(sentence);
         if (audioUrl) {
           enqueueAudio(audioUrl);
         }
       } catch (err) {
-        console.error('增量TTS生成失败:', err);
+        console.error('❌ 增量Kokoro TTS生成失败:', err);
       }
     }
   }, [enableVoice, voiceSettings.autoPlay, generateSpeech, enqueueAudio, extractSentences]);
 
-  // -- 增量流式朗读开关。如果为 true，则在生成回复时实时播放分句语音。
-  const incrementalTTS = false;
+  // 在消息处理中启用增量TTS
+  useEffect(() => {
+    if (!incrementalTTS) return;
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.data.type === 'ai-response-delta' && event.data.messageId) {
+        // 处理增量文本，实时生成语音
+        processStreamingSpeech(event.data.messageId, event.data.delta);
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [incrementalTTS, processStreamingSpeech]);
 
   // 位于 pendingTaskIds 状态声明之后，新增两个引用用于检测何时应触发续写
   const hadPendingRef = useRef(false);
@@ -2505,26 +2721,36 @@ export default function FloatingAssistant({ config = {}, onError, initialOpen = 
                     onChange={(e) => setVoiceSettings(prev => ({ ...prev, voice: e.target.value }))}
                     className="w-full p-2 border border-gray-300 rounded-md text-sm"
                   >
-                    {VOICE_OPTIONS.map(option => (
-                      <option key={option.id} value={option.id}>
-                        {option.name}
-                      </option>
-                    ))}
+                    {availableVoices.length > 0 ? (
+                      availableVoices.map(voice => (
+                        <option key={voice.id} value={voice.id}>
+                          {voice.displayName || voice.name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="zf_001">中文女声 (zf_001)</option>
+                    )}
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    语速: {voiceSettings.rate}
+                    语速: {voiceSettings.rate}x
                   </label>
                   <input
                     type="range"
-                    min="-50"
-                    max="100"
-                    value={parseInt(voiceSettings.rate)}
-                    onChange={(e) => setVoiceSettings(prev => ({ ...prev, rate: `${e.target.value}%` }))}
+                    min="0.5"
+                    max="2.0"
+                    step="0.1"
+                    value={parseFloat(voiceSettings.rate)}
+                    onChange={(e) => setVoiceSettings(prev => ({ ...prev, rate: e.target.value }))}
                     className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                   />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>0.5x</span>
+                    <span>1.0x</span>
+                    <span>2.0x</span>
+                  </div>
                 </div>
 
                 <div>
