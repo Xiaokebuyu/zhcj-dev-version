@@ -34,6 +34,14 @@ psutil>=5.9.0
 # 国内网络优化
 requests>=2.31.0
 httpx>=0.24.0
-#有缺失的包，需要官方源安装
+
+#有缺失的包，需要官方源/清华源安装
 num2words~=0.5.13
 spacy
+ordered_set
+pypinyin
+cn2an
+jieba
+pypinyin_dict
+misaki[en]>=0.8.2
+#  python -m spacy download en_core_web_sm 试试需要安装

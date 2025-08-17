@@ -1,230 +1,255 @@
-"""
-Kokoro TTS 独立流式服务 - 修复版本
-解决huggingface_hub新版本兼容问题
-"""
-
+import os
+import sys
+import time
 import asyncio
 import io
-import wave
 import re
-import os
-import time
-from typing import AsyncGenerator, Optional, List, Dict, Any
-from pathlib import Path
 import numpy as np
-from loguru import logger
-import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from typing import AsyncGenerator, Optional
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import uuid
-
-# ============ 国内镜像站配置 ============
-# 直接设置环境变量，避免API兼容问题
-def setup_china_mirrors():
-    """设置国内镜像站环境变量"""
-    mirror_config = {
-        # HuggingFace镜像 - 使用阿里云镜像
-        'HF_ENDPOINT': 'https://hf-mirror.com',
-        'HUGGINGFACE_HUB_CACHE': os.path.abspath('./cache/huggingface'),
-        'HF_HOME': os.path.abspath('./cache/huggingface'),
-        
-        # PyTorch镜像
-        'TORCH_HOME': os.path.abspath('./cache/torch'),
-        
-        # 禁用遥测
-        'HF_HUB_DISABLE_TELEMETRY': '1',
-        'DISABLE_TELEMETRY': '1',
-        
-        # 性能配置
-        'OMP_NUM_THREADS': '4',
-        'MKL_NUM_THREADS': '4',
-        'NUMEXPR_NUM_THREADS': '4',
-    }
-    
-    for key, value in mirror_config.items():
-        os.environ[key] = value
-        logger.info(f"🔧 设置环境变量: {key}={value}")
-
-# 在模块加载时立即设置
-setup_china_mirrors()
-
-# 确保缓存目录存在
-os.makedirs('./cache/huggingface', exist_ok=True)
-os.makedirs('./cache/torch', exist_ok=True)
-os.makedirs('./logs', exist_ok=True)
+from loguru import logger
+import torch
 
 # 配置日志
-logger.add("logs/kokoro_tts.log", rotation="10 MB", level="INFO")
+logger.remove()
+logger.add(
+    sink=sys.stdout,
+    level="INFO",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | <level>{message}</level>",
+    colorize=True
+)
+
+# 环境配置优化
+os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
+os.environ['HUGGINGFACE_HUB_CACHE'] = os.getenv('HUGGINGFACE_HUB_CACHE', './cache/huggingface')
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "zf_001"  # 默认使用指定的语音
-    speed: float = 1.2     # 默认稍微加快语速
-    stream: bool = True    # 是否流式返回
-    chunk_size: int = 30   # 文本分块大小
-
-class TTSStatusResponse(BaseModel):
-    success: bool
-    message: str
-    audio_length: Optional[float] = None
-    processing_time: Optional[float] = None
+    voice: str = "zf_001"
+    speed: float = 1.0
+    stream: bool = True
+    chunk_size: int = 50  # 增加chunk_size以减少不必要的分割
 
 class KokoroTTSService:
-    """Kokoro TTS 核心服务类 - 修复版本"""
+    """Kokoro TTS 核心服务类 - 完全修复版本"""
     
     def __init__(self):
-        self.pipeline = None
-        # 🔧 优化音频参数，提高生成速度
-        self.sample_rate = int(os.getenv("KOKORO_SAMPLE_RATE", "22050"))
+        self.model = None
+        self.zh_pipeline = None
+        self.en_pipeline = None
+        
+        # ✅ 使用官方标准配置
+        self.sample_rate = 24000  # 官方标准采样率
         self.channels = 1
         self.sample_width = 2
-        self.max_chunk_length = int(os.getenv("KOKORO_MAX_CHUNK_LENGTH", "30"))
-        self.chunk_delay = float(os.getenv("KOKORO_CHUNK_DELAY", "0.005"))
+        self.chunk_delay = 0.003  # 优化延迟
+        
+        # 设备配置
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        logger.info(f"🔧 使用设备: {self.device}")
+        
         self._initialize_pipeline()
     
     def _initialize_pipeline(self):
-        """初始化Kokoro管道 - 修复版本"""
+        """完整初始化Kokoro管道 - 实用健壮版本"""
         try:
             logger.info("🚀 正在初始化Kokoro TTS管道...")
             
-            # ✅ 修复：移除过时的constants设置，直接使用环境变量
-            logger.info(f"📁 缓存目录: {os.environ.get('HUGGINGFACE_HUB_CACHE')}")
-            logger.info(f"🌐 HF镜像: {os.environ.get('HF_ENDPOINT')}")
+            # 导入Kokoro组件
+            from kokoro import KModel, KPipeline
             
-            # 导入并初始化Kokoro
-            from kokoro import KPipeline
-            self.pipeline = KPipeline(lang_code="z", repo_id="hexgrad/Kokoro-82M-v1.1-zh")  # 中文管道，明确指定模型
-            logger.info("✅ Kokoro TTS 管道初始化成功")
+            # 模型配置
+            repo_id = 'hexgrad/Kokoro-82M-v1.1-zh'
+            
+            # ✅ 完整的模型初始化（按官方方式）
+            logger.info("📦 加载模型...")
+            self.model = KModel(repo_id=repo_id).to(self.device).eval()
+            
+            # ✅ 尝试初始化英文管道（可选，失败不影响主功能）
+            logger.info("🔤 初始化英文管道...")
+            try:
+                self.en_pipeline = KPipeline(lang_code='a', repo_id=repo_id, model=False)
+                logger.info("✅ 英文管道初始化成功")
+                has_en_pipeline = True
+            except Exception as e:
+                logger.warning(f"⚠️ 英文管道初始化失败: {e}")
+                logger.info("💡 将使用简化的英文处理，不影响主要功能")
+                self.en_pipeline = None
+                has_en_pipeline = False
+            
+            # ✅ 初始化中文管道（适应性版本）
+            logger.info("🈳 初始化中文管道...")
+            if has_en_pipeline:
+                # 使用完整版本（包含英文处理）
+                self.zh_pipeline = KPipeline(
+                    lang_code='z', 
+                    repo_id=repo_id, 
+                    model=self.model, 
+                    en_callable=self._en_callable
+                )
+                logger.info("✅ 中文管道初始化完成（包含英文支持）")
+            else:
+                # 使用简化版本（纯中文）
+                self.zh_pipeline = KPipeline(
+                    lang_code='z', 
+                    repo_id=repo_id, 
+                    model=self.model
+                )
+                logger.info("✅ 中文管道初始化完成（纯中文模式）")
+            
+            logger.info("✅ Kokoro TTS 管道初始化完成")
             
         except ImportError as e:
             logger.error("❌ Kokoro 库未安装")
             logger.error("💡 请运行安装命令:")
-            logger.error("   pip install -i https://pypi.tuna.tsinghua.edu.cn/simple kokoro-tts")
+            logger.error("   pip install kokoro>=0.8.2 \"misaki[zh]>=0.8.2\"")
             raise
         except Exception as e:
             logger.error(f"❌ Kokoro TTS 初始化失败: {e}")
-            logger.error("💡 详细错误信息:")
-            logger.error(f"   错误类型: {type(e).__name__}")
-            logger.error(f"   错误描述: {str(e)}")
-            
-            # 🔧 添加更详细的调试信息
-            logger.info("🔍 环境检查:")
-            logger.info(f"   Python版本: {os.sys.version}")
-            logger.info(f"   工作目录: {os.getcwd()}")
-            logger.info(f"   缓存目录存在: {os.path.exists('./cache/huggingface')}")
-            
-            # 尝试检查网络连接
-            try:
-                import requests
-                response = requests.get(os.environ.get('HF_ENDPOINT', 'https://hf-mirror.com'), timeout=10)
-                logger.info(f"   镜像连接状态: {response.status_code}")
-            except Exception as net_e:
-                logger.error(f"   网络连接失败: {net_e}")
-            
             raise
     
+    def _en_callable(self, text: str) -> str:
+        """处理中英文混合的英文部分 - 适应性版本"""
+        try:
+            # 特殊词汇处理
+            special_words = {
+                'Kokoro': 'kˈOkəɹO',
+                'AI': 'ˌeɪˈaɪ',
+                'ai': 'ˌeɪˈaɪ',
+                'TTS': 'tˌiːtˌiːˈɛs',
+                'API': 'ˌeɪpˌiːˈaɪ',
+                'GPU': 'dʒˌiːpˌiːˈuː',
+                'CPU': 'sˌiːpˌiːˈuː',
+                'HTTP': 'ˌeɪtʃtˌiːtˌiːˈpiː',
+                'JSON': 'dʒˈeɪsən',
+                'OK': 'oʊˈkeɪ',
+                'USB': 'jˌuːɛsˈbiː'
+            }
+            
+            if text in special_words:
+                return special_words[text]
+            
+            # 如果有英文管道，使用它
+            if self.en_pipeline is not None:
+                return next(self.en_pipeline(text)).phonemes
+            else:
+                # 简化处理：对于简单英文，直接返回
+                # 这不是完美的，但对于大多数场景足够了
+                logger.debug(f"简化英文处理: '{text}'")
+                return text.lower()
+                
+        except Exception as e:
+            logger.warning(f"英文处理失败 '{text}': {e}")
+            return text
+    
+    def _speed_callable(self, len_ps: int) -> float:
+        """动态语速控制 - 解决长文本rushing问题"""
+        # 基础语速
+        base_speed = 1.0
+        
+        # 根据音素长度动态调整
+        if len_ps <= 50:
+            speed = base_speed
+        elif len_ps <= 100:
+            # 短句保持正常语速
+            speed = base_speed * 0.95
+        elif len_ps <= 150:
+            # 中等长度稍微减速
+            speed = base_speed * 0.9
+        else:
+            # 长句显著减速以提高清晰度
+            speed = base_speed * 0.8
+        
+        # 对话场景优化：稍微加速以显得更自然
+        return speed * 1.1
+    
     def _clean_text(self, text: str) -> str:
-        """清理文本，移除markdown格式等"""
-        # 移除代码块
-        text = re.sub(r'```[\s\S]*?```', '', text)
-        # 移除行内代码
-        text = re.sub(r'`([^`]+)`', r'\1', text)
-        # 移除粗体格式
-        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-        text = re.sub(r'__([^_]+)__', r'\1', text)
-        # 移除斜体格式
-        text = re.sub(r'\*([^*]+)\*', r'\1', text)
-        text = re.sub(r'_([^_]+)_', r'\1', text)
-        # 移除删除线
-        text = re.sub(r'~~([^~]+)~~', r'\1', text)
-        # 移除标题标记
-        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-        # 移除引用标记
-        text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
-        # 移除列表标记
-        text = re.sub(r'^[\s]*[-*+]\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)
-        # 移除链接，保留文本
-        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-        # 移除图片
-        text = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', text)
-        # 移除HTML标签
-        text = re.sub(r'<[^>]+>', '', text)
-        # 移除表格分隔符
-        text = re.sub(r'\|', ' ', text)
+        """优化文本清理，保持对话自然性"""
+        if not text:
+            return ""
+        
         # 清理多余空白
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # 处理表情符号（转换为语调提示）
+        emoji_patterns = {
+            '😊': '，',  # 微笑转为短暂停顿
+            '😄': '！',  # 开心转为感叹
+            '😢': '...',  # 难过转为省略
+            '❤️': '，',  # 爱心转为温柔停顿
+            '👍': '，很好，',  # 点赞转为肯定语气
+            '🤔': '，嗯，',  # 思考转为思考语气
+        }
+        
+        for emoji, replacement in emoji_patterns.items():
+            text = text.replace(emoji, replacement)
+        
+        # 移除剩余的emoji
+        text = re.sub(r'[^\w\s\u4e00-\u9fff，。！？：；""''（）【】《》、.!?:;"\'()\-\[\]<>]', '', text)
         
         return text
     
-    def _split_into_chunks(self, text: str, max_length: int = None) -> List[str]:
-        """将长文本分割为更小的块，提高生成速度"""
-        if max_length is None:
-            max_length = self.max_chunk_length
-            
-        # 首先按标点分割
-        sentences = re.split(r'([。！？.!?])', text)
+    def _smart_split_text(self, text: str, max_chunk_size: int = 50) -> list:
+        """智能文本分割 - 保持语义完整性"""
+        if len(text) <= max_chunk_size:
+            return [text]
+        
         chunks = []
-        current_chunk = ""
         
-        i = 0
-        while i < len(sentences):
-            sentence = sentences[i]
-            if i + 1 < len(sentences) and sentences[i + 1] in '。！？.!?':
-                sentence += sentences[i + 1]
-                i += 2
-            else:
-                i += 1
+        # 首先按段落分割
+        paragraphs = re.split(r'\n\s*\n', text)
+        
+        for paragraph in paragraphs:
+            if not paragraph.strip():
+                continue
             
-            # 如果添加这句话会超过长度限制
-            if len(current_chunk + sentence) > max_length and current_chunk:
-                chunks.append(current_chunk.strip())
-                current_chunk = sentence
-            else:
-                current_chunk += sentence
-        
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
-        
-        # 如果单个句子仍然太长，按词分割
-        final_chunks = []
-        for chunk in chunks:
-            if len(chunk) <= max_length:
-                final_chunks.append(chunk)
-            else:
-                # 按逗号进一步分割
-                sub_chunks = self._split_by_comma(chunk, max_length)
-                final_chunks.extend(sub_chunks)
-        
-        return [chunk for chunk in final_chunks if chunk.strip()]
-    
-    def _split_by_comma(self, text: str, max_length: int) -> List[str]:
-        """按逗号分割长句"""
-        parts = re.split(r'([，,])', text)
-        chunks = []
-        current_chunk = ""
-        
-        i = 0
-        while i < len(parts):
-            part = parts[i]
-            if i + 1 < len(parts) and parts[i + 1] in '，,':
-                part += parts[i + 1]
-                i += 2
-            else:
-                i += 1
+            # 按句子分割
+            sentences = re.split(r'([。！？.!?]+)', paragraph)
+            current_chunk = ""
             
-            if len(current_chunk + part) > max_length and current_chunk:
+            i = 0
+            while i < len(sentences):
+                sentence = sentences[i]
+                punct = sentences[i + 1] if i + 1 < len(sentences) else ""
+                full_sentence = sentence + punct
+                
+                # 如果当前句子太长，按逗号分割
+                if len(full_sentence) > max_chunk_size:
+                    sub_parts = re.split(r'([，,、])', full_sentence)
+                    current_sub_chunk = ""
+                    
+                    for j in range(0, len(sub_parts), 2):
+                        part = sub_parts[j]
+                        delimiter = sub_parts[j + 1] if j + 1 < len(sub_parts) else ""
+                        full_part = part + delimiter
+                        
+                        if len(current_sub_chunk + full_part) <= max_chunk_size:
+                            current_sub_chunk += full_part
+                        else:
+                            if current_sub_chunk.strip():
+                                chunks.append(current_sub_chunk.strip())
+                            current_sub_chunk = full_part
+                    
+                    if current_sub_chunk.strip():
+                        chunks.append(current_sub_chunk.strip())
+                
+                # 正常长度的句子
+                elif len(current_chunk + full_sentence) <= max_chunk_size:
+                    current_chunk += full_sentence
+                else:
+                    if current_chunk.strip():
+                        chunks.append(current_chunk.strip())
+                    current_chunk = full_sentence
+                
+                i += 2
+            
+            if current_chunk.strip():
                 chunks.append(current_chunk.strip())
-                current_chunk = part
-            else:
-                current_chunk += part
         
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
-        
-        return chunks
+        return [chunk for chunk in chunks if chunk.strip()]
     
     def _create_wav_header(self, data_size: int = 0) -> bytes:
         """创建WAV文件头部"""
@@ -255,11 +280,11 @@ class KokoroTTSService:
         self, 
         text: str, 
         voice: str = "zf_001", 
-        speed: float = 1.2,
-        chunk_size: int = 30
+        speed: Optional[float] = None,
+        chunk_size: int = 50
     ) -> AsyncGenerator[bytes, None]:
-        """生成流式音频数据 - 性能优化版本"""
-        if not self.pipeline:
+        """生成流式音频数据 - 完全优化版本"""
+        if not self.zh_pipeline:
             logger.warning("⚠️ 管道未初始化，尝试重新初始化...")
             self._initialize_pipeline()
         
@@ -273,14 +298,11 @@ class KokoroTTSService:
                 logger.warning("⚠️ 清理后文本为空")
                 return
             
-            logger.info(f"🎙️ 开始生成语音 [voice: {voice}, speed: {speed}]: {clean_text[:50]}...")
+            logger.info(f"🎙️ 开始生成语音 [voice: {voice}]: {clean_text[:50]}...")
             
-            # 🔧 智能分块处理
-            if len(clean_text) > chunk_size:
-                chunks = self._split_into_chunks(clean_text, chunk_size)
-                logger.debug(f"📦 文本分为 {len(chunks)} 块")
-            else:
-                chunks = [clean_text]
+            # ✅ 智能分块处理
+            chunks = self._smart_split_text(clean_text, chunk_size)
+            logger.debug(f"📦 文本智能分为 {len(chunks)} 块")
             
             # 先发送WAV头部
             yield self._create_wav_header(0)
@@ -296,17 +318,22 @@ class KokoroTTSService:
                 logger.debug(f"🔊 处理第 {i+1}/{len(chunks)} 块: {chunk[:30]}...")
                 
                 try:
-                    for result in self.pipeline(
+                    # 使用动态语速或指定语速
+                    chunk_speed = speed if speed is not None else self._speed_callable
+                    
+                    # ✅ 使用完整的管道生成音频
+                    generator = self.zh_pipeline(
                         chunk, 
                         voice=voice, 
-                        speed=speed, 
-                        split_pattern=r"[。！？.!?]+"
-                    ):
+                        speed=chunk_speed
+                    )
+                    
+                    for result in generator:
                         if result.audio is None:
                             continue
                         
                         # 转换为16位PCM格式
-                        audio_data = (result.audio.numpy() * 32767).astype(np.int16)
+                        audio_data = (result.audio.cpu().numpy() * 32767).astype(np.int16)
                         audio_bytes = audio_data.tobytes()
                         
                         total_audio_bytes += len(audio_bytes)
@@ -333,12 +360,31 @@ class KokoroTTSService:
             logger.error(f"❌ 音频生成失败: {e}")
             raise HTTPException(status_code=500, detail=f"音频生成失败: {str(e)}")
 
+# 全局TTS服务实例
+tts_service = None
+
+async def startup_event():
+    """应用启动时初始化TTS服务"""
+    global tts_service
+    try:
+        logger.info("🚀 正在启动Kokoro TTS服务...")
+        tts_service = KokoroTTSService()
+        logger.info("✅ 服务启动成功")
+    except Exception as e:
+        logger.error(f"❌ 服务启动失败: {e}")
+        tts_service = None
+
 # 创建FastAPI应用
 app = FastAPI(
     title="Kokoro TTS Service",
-    description="专为虚拟主播AI设计的高性能流式语音合成服务 (修复版)",
-    version="1.1.1"
+    description="专为虚拟主播AI设计的高质量流式语音合成服务 (完全优化版)",
+    version="2.0.0"
 )
+
+# 添加启动事件
+@app.on_event("startup")
+async def on_startup():
+    await startup_event()
 
 # CORS中间件
 app.add_middleware(
@@ -349,114 +395,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 全局TTS服务实例
-tts_service = None
-
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时初始化TTS服务"""
-    global tts_service
-    try:
-        logger.info("🚀 正在启动Kokoro TTS服务...")
-        tts_service = KokoroTTSService()
-        logger.info("✅ 服务启动成功")
-    except Exception as e:
-        logger.error(f"❌ 服务启动失败: {e}")
-        # 不立即退出，允许服务启动但标记为不健康
-        tts_service = None
-
 @app.get("/")
 async def root():
     """服务根路径"""
     return {
         "service": "Kokoro TTS",
-        "version": "1.1.1 (修复版)",
+        "version": "2.0.0 (完全优化版)",
         "status": "running" if tts_service else "degraded",
-        "fixes": [
-            "修复huggingface_hub兼容问题",
-            "改进错误处理",
-            "优化环境变量设置",
-            "增强调试信息"
-        ],
-        "endpoints": {
-            "tts_stream": "/tts/stream",
-            "tts_file": "/tts/file",
-            "health": "/health",
-            "voices": "/voices",
-            "config": "/config",
-            "debug": "/debug"
-        }
-    }
-
-@app.get("/debug")
-async def debug_info():
-    """调试信息接口"""
-    import sys
-    return {
-        "python_version": sys.version,
-        "working_directory": os.getcwd(),
-        "environment_variables": {
-            "HF_ENDPOINT": os.environ.get('HF_ENDPOINT'),
-            "HUGGINGFACE_HUB_CACHE": os.environ.get('HUGGINGFACE_HUB_CACHE'),
-            "HF_HOME": os.environ.get('HF_HOME'),
-        },
-        "cache_directories": {
-            "huggingface_exists": os.path.exists('./cache/huggingface'),
-            "torch_exists": os.path.exists('./cache/torch'),
-            "logs_exists": os.path.exists('./logs'),
-        },
-        "service_status": {
-            "pipeline_initialized": tts_service is not None and tts_service.pipeline is not None,
-            "service_instance": tts_service is not None,
-        }
-    }
-
-@app.get("/config")
-async def get_config():
-    """获取当前配置"""
-    return {
-        "sample_rate": tts_service.sample_rate if tts_service else "N/A",
-        "max_chunk_length": tts_service.max_chunk_length if tts_service else "N/A",
-        "chunk_delay": tts_service.chunk_delay if tts_service else "N/A",
-        "mirror_sites": {
-            "huggingface": os.getenv('HF_ENDPOINT'),
-            "cache_dir": os.getenv('HUGGINGFACE_HUB_CACHE'),
-        },
-        "fixes_applied": [
-            "huggingface_hub constants API修复",
-            "环境变量直接设置",
-            "启动时延迟初始化",
-            "详细错误信息"
+        "optimizations": [
+            "24kHz 采样率",
+            "完整模型初始化",
+            "动态语速控制",
+            "智能文本分割",
+            "中英文混合处理",
+            "对话语调优化"
         ]
     }
 
 @app.get("/health")
 async def health_check():
-    """健康检查"""
+    """健康检查接口"""
     try:
-        service_working = tts_service is not None and tts_service.pipeline is not None
+        service_working = tts_service is not None and tts_service.zh_pipeline is not None
         
         health_status = {
-            "status": "healthy" if service_working else "degraded",
-            "tts_service": "available" if service_working else "unavailable",
+            "status": "healthy" if service_working else "unhealthy",
             "initialization": "success" if service_working else "failed",
-            "cache_dirs": {
-                "huggingface": os.path.exists("./cache/huggingface"),
-                "torch": os.path.exists("./cache/torch"),
-                "logs": os.path.exists("./logs")
-            },
-            "environment": {
-                "hf_endpoint": os.environ.get('HF_ENDPOINT'),
-                "cache_configured": bool(os.environ.get('HUGGINGFACE_HUB_CACHE')),
-            },
+            "model_loaded": tts_service.model is not None if tts_service else False,
+            "device": tts_service.device if tts_service else "unknown",
+            "sample_rate": tts_service.sample_rate if tts_service else 0,
             "timestamp": time.time()
         }
-        
-        if service_working:
-            health_status["performance"] = {
-                "sample_rate": tts_service.sample_rate,
-                "chunk_delay": tts_service.chunk_delay
-            }
         
         return health_status
         
@@ -476,14 +445,22 @@ async def get_voices():
             {
                 "id": "zf_001",
                 "name": "zf_001",
-                "description": "中文女声 (优化版)",
+                "description": "中文女声 (官方优化版)",
+                "language": "zh-CN",
+                "optimized": True,
+                "available": tts_service is not None
+            },
+            {
+                "id": "zf_002", 
+                "name": "zf_002",
+                "description": "中文女声 (备选)",
                 "language": "zh-CN",
                 "optimized": True,
                 "available": tts_service is not None
             }
         ],
         "default_voice": "zf_001",
-        "supported_languages": ["zh-CN"],
+        "supported_languages": ["zh-CN", "en-US (混合)"],
         "service_status": "available" if tts_service else "unavailable"
     }
 
@@ -512,7 +489,8 @@ async def tts_stream(request: TTSRequest):
                 "Access-Control-Allow-Origin": "*",
                 "X-TTS-Mode": "stream",
                 "X-TTS-Voice": request.voice,
-                "X-TTS-Speed": str(request.speed)
+                "X-TTS-Speed": str(request.speed),
+                "X-TTS-Optimized": "true"
             }
         )
         
@@ -555,7 +533,8 @@ async def tts_file(request: TTSRequest):
                 "Access-Control-Allow-Origin": "*",
                 "X-TTS-Mode": "file",
                 "X-TTS-Voice": request.voice,
-                "X-TTS-Speed": str(request.speed)
+                "X-TTS-Speed": str(request.speed),
+                "X-TTS-Optimized": "true"
             }
         )
         
@@ -565,14 +544,15 @@ async def tts_file(request: TTSRequest):
 
 # 启动参数
 if __name__ == "__main__":
-    logger.info("🚀 启动 Kokoro TTS 服务 (修复版)")
+    logger.info("🚀 启动 Kokoro TTS 服务 (完全优化版)")
     logger.info(f"📁 HuggingFace缓存: {os.getenv('HUGGINGFACE_HUB_CACHE')}")
     logger.info(f"🌐 HuggingFace镜像: {os.getenv('HF_ENDPOINT')}")
     
+    import uvicorn
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
         port=8001,
-        reload=False,  # 修复版本建议禁用reload
+        reload=False,
         log_level="info"
     )
