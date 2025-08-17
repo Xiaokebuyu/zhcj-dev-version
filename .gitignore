@@ -146,5 +146,7 @@ pnpm-debug.log*
 @/OpenManus
 
 chinese_voices_samples/
-kokoro/
-@kokoro/
+# Project specific ignores
+cache/
+.github/
+demo/

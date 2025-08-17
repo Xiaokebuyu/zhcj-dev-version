@@ -1,2 +1,0 @@
-2025-08-17 02:22:12.812 | ERROR    | __main__:_initialize_pipeline:104 - ❌ Kokoro 库未安装，请运行: pip install kokoro-tts
-2025-08-17 02:22:12.812 | ERROR    | __main__:_initialize_pipeline:105 - 详细错误: No module named 'kokoro'

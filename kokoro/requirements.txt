@@ -1,0 +1,39 @@
+# Kokoro TTS Service 依赖包 - 国内镜像优化版本
+# 使用方法: pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+
+# 核心框架
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# Kokoro TTS - 使用国内镜像安装
+kokoro-tts>=0.1.0
+
+# 音频处理
+numpy>=1.24.0
+scipy>=1.10.0
+
+# 机器学习框架 (使用清华源)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# HuggingFace相关
+transformers>=4.30.0
+huggingface-hub>=0.15.0
+
+# 日志
+loguru>=0.7.0
+
+# 其他工具
+python-multipart>=0.0.6
+aiofiles>=23.0.0
+
+# 性能优化
+psutil>=5.9.0
+
+# 国内网络优化
+requests>=2.31.0
+httpx>=0.24.0
+#有缺失的包，需要官方源安装
+num2words~=0.5.13
+spacy
